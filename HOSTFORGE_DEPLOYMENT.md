@@ -10,6 +10,12 @@ This application runs PHP 8.3 with Apache in the supplied Dockerfile.
 
 The Dockerfile declares `EXPOSE 80` and includes a Docker health check for `/health.php`.
 
+## Employee document uploads and HTTP 413
+
+The Docker image allows request bodies up to 32 MiB at Apache/PHP, and PHP accepts individual uploads up to 16 MiB. The application intentionally validates employee documents at **10 MiB per file** (PDF, JPG, PNG, DOC or DOCX), leaving room for multipart form overhead and other form fields. These settings are applied from the Dockerfile, so rebuild and redeploy the image after changing them.
+
+If the browser still receives a plain HTTP **413** response before the application displays its normal upload error, the request is being rejected by an upstream ingress/reverse proxy or hosting-level body-size policy. Raise that platform-level maximum to at least **32 MiB** for this service; a PHP or Apache setting inside the container cannot override a smaller limit enforced before the request reaches the container. No database migration is needed for this fix.
+
 ## Required environment variables
 
 Configure these in HostForge's service environment settings. Do not commit a real `.env` file or bake secrets into the image.

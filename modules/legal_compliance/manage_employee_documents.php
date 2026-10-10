@@ -26,7 +26,31 @@ page_header('Employee Document Upload Center','legal'); show_flash(); ?>
 <article class="record-form document-upload-card"><div class="gw-panel-head"><div><h2><?=e($d['document_name'])?></h2><span><?=e($d['employee_name'])?> · Health record #<?=e($d['health_record_id']??'—')?></span></div><span class="gw-status-pill"><?=e($d['status'])?></span></div>
 <?php if(!empty($d['uploaded_file_name'])): ?><p class="document-current-file"><span class="material-symbols-outlined">description</span><?=e($d['uploaded_file_name'])?> <a class="gw-btn secondary" target="_blank" rel="noopener" href="<?=e(url('/modules/legal_compliance/view_document.php?id='.(int)$d['id']))?>">View Document</a></p><?php endif; ?>
 <form method="post" action="<?=e(url('/modules/legal_compliance/index.php'))?>" enctype="multipart/form-data"><input type="hidden" name="action" value="update_employee_document"><input type="hidden" name="id" value="<?=(int)$d['id']?>"><input type="hidden" name="csrf_token" value="<?=e(csrf_token())?>"><input type="hidden" name="return_to" value="/modules/legal_compliance/manage_employee_documents.php<?= $recordFilter ? '?record='.$recordFilter : '' ?>">
-<div class="form-grid"><div class="full"><label>Document Owner / Employee</label><select name="health_record_id" required><option value="">Choose employee</option><?php foreach($employeeOptions as $employee): ?><option value="<?= (int)$employee['id']?>" <?=((int)($d['health_record_id']??0)===(int)$employee['id'])?'selected':''?>><?=e($employee['employee_name'])?> — Health record #<?= (int)$employee['id']?></option><?php endforeach; ?></select><small class="small-muted">Choose the employee who owns this document. The existing document record and uploaded file are retained.</small></div><div><label>Status</label><select name="status" required><?php foreach(['Missing','Requested','Received','Verified','Expired','Not Applicable'] as $st): ?><option value="<?=e($st)?>" <?=$d['status']===$st?'selected':''?>><?=e($st)?></option><?php endforeach; ?></select></div><div><label>Issue Date</label><input type="date" name="issue_date" value="<?=e($d['issue_date']??'')?>"></div><div><label>Expiry Date</label><input type="date" name="expiry_date" value="<?=e($d['expiry_date']??'')?>"></div><div class="full"><label>Upload / Replace Document</label><input type="file" name="document_file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"><small class="small-muted">Leave empty to keep the currently uploaded file.</small></div><div class="full"><label>Notes</label><textarea name="document_notes" rows="2" placeholder="Optional notes"><?=e($d['notes']??'')?></textarea></div></div><div class="record-actions"><button class="gw-btn primary" type="submit">Save Document Record</button></div></form></article>
+<div class="form-grid"><div class="full"><label>Document Owner / Employee</label><select name="health_record_id" required><option value="">Choose employee</option><?php foreach($employeeOptions as $employee): ?><option value="<?= (int)$employee['id']?>" <?=((int)($d['health_record_id']??0)===(int)$employee['id'])?'selected':''?>><?=e($employee['employee_name'])?> — Health record #<?= (int)$employee['id']?></option><?php endforeach; ?></select><small class="small-muted">Choose the employee who owns this document. The existing document record and uploaded file are retained.</small></div><div><label>Status</label><select name="status" required><?php foreach(['Missing','Requested','Received','Verified','Expired','Not Applicable'] as $st): ?><option value="<?=e($st)?>" <?=$d['status']===$st?'selected':''?>><?=e($st)?></option><?php endforeach; ?></select></div><div><label>Issue Date</label><input type="date" name="issue_date" value="<?=e($d['issue_date']??'')?>"></div><div><label>Expiry Date</label><input type="date" name="expiry_date" value="<?=e($d['expiry_date']??'')?>"></div><div class="full"><label>Upload / Replace Document</label><input type="file" name="document_file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" data-max-bytes="10485760"><small class="small-muted">Maximum 10 MB. Leave empty to keep the currently uploaded file.</small></div><div class="full"><label>Notes</label><textarea name="document_notes" rows="2" placeholder="Optional notes"><?=e($d['notes']??'')?></textarea></div></div><div class="record-actions"><button class="gw-btn primary" type="submit">Save Document Record</button></div></form></article>
 <?php endforeach; if(!$documents): ?><p class="empty">No document checklist items found. Add an employee health record first to generate the checklist.</p><?php endif; ?>
 </div></section>
+<script>
+document.querySelectorAll('input[type="file"][data-max-bytes]').forEach(function (input) {
+    input.addEventListener('change', function () {
+        var maxBytes = Number(input.dataset.maxBytes || 0);
+        var file = input.files && input.files[0];
+        var notice = input.parentElement.querySelector('[data-upload-error]');
+        if (!notice) {
+            notice = document.createElement('small');
+            notice.className = 'small-muted';
+            notice.dataset.uploadError = '1';
+            notice.setAttribute('aria-live', 'polite');
+            input.insertAdjacentElement('afterend', notice);
+        }
+        if (file && maxBytes > 0 && file.size > maxBytes) {
+            input.value = '';
+            notice.textContent = 'This file is larger than 10 MB. Please select a smaller PDF, JPG, PNG, DOC or DOCX file.';
+            notice.style.color = 'var(--danger, #b42318)';
+        } else {
+            notice.textContent = '';
+            notice.style.color = '';
+        }
+    });
+});
+</script>
 <?php page_footer(); ?>

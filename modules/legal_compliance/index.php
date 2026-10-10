@@ -10,6 +10,18 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST'
 }
 $svc=service('legal');
 if($_SERVER['REQUEST_METHOD']==='POST'){
+    // PHP empties both $_POST and $_FILES when the request body exceeds post_max_size.
+    // Detect that condition so oversized uploads receive a useful message instead of a CSRF error.
+    $contentLength=(int)($_SERVER['CONTENT_LENGTH']??0);
+    $postMaxRaw=trim((string)ini_get('post_max_size'));
+    $postMaxBytes=0;
+    if(preg_match('/^(\d+(?:\.\d+)?)\s*([KMG]?)B?$/i',$postMaxRaw,$postMaxMatch)){
+        $postMaxBytes=(int)((float)$postMaxMatch[1]*match(strtoupper($postMaxMatch[2])){'K'=>1024,'M'=>1048576,'G'=>1073741824,default=>1});
+    }
+    if($contentLength>0 && $postMaxBytes>0 && $contentLength>$postMaxBytes && empty($_POST) && empty($_FILES)){
+        flash('error','The upload request is larger than the server accepts. Employee documents must be 10 MB or smaller. Please choose a smaller file; if this keeps happening, the hosting request-size limit must be increased.');
+        redirect('/modules/legal_compliance/manage_employee_documents.php');
+    }
     if (!csrf_valid($_POST['csrf_token'] ?? null)) { http_response_code(419); exit('Security token expired. Please refresh and try again.'); }
     try { $message=$svc->handle((string)($_POST['action']??''),$_POST,current_user(),$_FILES); flash('success',$message); }
     catch(Throwable $e){ flash('error','Unable to save record: '.$e->getMessage()); }

@@ -31,6 +31,7 @@ RUN a2enmod headers rewrite \
         echo '        AllowOverride All'; \
         echo '        Options -Indexes +FollowSymLinks'; \
         echo '        Require all granted'; \
+        echo '        LimitRequestBody 33554432'; \
         echo '    </Directory>'; \
         echo '    ErrorLog /dev/stderr'; \
         echo '    CustomLog /dev/stdout combined'; \
@@ -44,8 +45,11 @@ RUN { \
         echo 'log_errors=On'; \
         echo 'error_log=/proc/self/fd/2'; \
         echo 'memory_limit=256M'; \
-        echo 'upload_max_filesize=64M'; \
-        echo 'post_max_size=64M'; \
+        echo 'upload_max_filesize=16M'; \
+        echo 'post_max_size=32M'; \
+        echo 'max_file_uploads=20'; \
+        echo 'max_input_time=120'; \
+        echo 'max_execution_time=120'; \
         echo 'session.cookie_httponly=1'; \
         echo 'session.cookie_samesite=Lax'; \
         echo 'session.use_strict_mode=1'; \

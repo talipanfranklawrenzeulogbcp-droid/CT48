@@ -132,7 +132,18 @@ final class LegalComplianceService {
             $path=$existing['document_path']??null; $original=$existing['uploaded_file_name']??null;
             $upload=$files['document_file']??null;
             if(is_array($upload) && ($upload['error']??UPLOAD_ERR_NO_FILE)!==UPLOAD_ERR_NO_FILE){
-                if(($upload['error']??UPLOAD_ERR_NO_FILE)!==UPLOAD_ERR_OK) throw new RuntimeException('The document upload failed. Please try again.');
+                $uploadError=(int)($upload['error']??UPLOAD_ERR_OK);
+                if($uploadError!==UPLOAD_ERR_OK){
+                    $uploadErrorMessage=match($uploadError){
+                        UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE => 'The selected document exceeds the server upload limit. Please choose a file of 10 MB or smaller.',
+                        UPLOAD_ERR_PARTIAL => 'The document was only partially uploaded. Please try again.',
+                        UPLOAD_ERR_NO_TMP_DIR => 'The server upload folder is unavailable. Please contact the system administrator.',
+                        UPLOAD_ERR_CANT_WRITE => 'The server could not save the uploaded document. Please contact the system administrator.',
+                        UPLOAD_ERR_EXTENSION => 'The server stopped this upload. Please contact the system administrator.',
+                        default => 'The document upload failed. Please try again.'
+                    };
+                    throw new RuntimeException($uploadErrorMessage);
+                }
                 if((int)($upload['size']??0)>10*1024*1024) throw new RuntimeException('Documents must be 10 MB or smaller.');
                 $tmp=(string)($upload['tmp_name']??'');
                 if($tmp==='' || !is_uploaded_file($tmp)) throw new RuntimeException('Invalid uploaded file.');
