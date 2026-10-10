@@ -56,7 +56,7 @@ final class AssetEquipmentService {
         ];
     }
 
-    public function handle(string $action, array $data, ?array $user): string {
+    public function handle(string $action, array $data, ?array $user, array $files = []): string {
         if ($action === 'add_asset') {
             $quantity = max(1, (int)($data['quantity'] ?? 1));
             $tag = trim((string)($data['asset_tag'] ?? ''));
@@ -69,25 +69,39 @@ final class AssetEquipmentService {
             if (!in_array($status, ['Available', 'Issued', 'Maintenance', 'Retired'], true)) {
                 throw new RuntimeException('Invalid asset status.');
             }
-
-            $stmt = $this->pdo->prepare(
-                'INSERT INTO assets(asset_tag, name, category, serial_number, status, quantity, location)
-                 VALUES(?, ?, ?, ?, ?, ?, ?)'
-            );
-            $stmt->execute([
-                $tag,
-                $name,
-                trim((string)($data['category'] ?? '')),
-                trim((string)($data['serial_number'] ?? '')),
-                $status,
-                $quantity,
-                trim((string)($data['location'] ?? '')),
-            ]);
-            $this->audit->record($user, self::MODULE, 'Register Asset', $tag);
-            return 'Asset registered.';
+            $image = $this->prepareAssetImage($files);
+            $imageStored = false;
+            if ($image !== null) $this->pdo->beginTransaction();
+            try {
+                $stmt = $this->pdo->prepare(
+                    'INSERT INTO assets(asset_tag, name, category, serial_number, status, quantity, location)
+                     VALUES(?, ?, ?, ?, ?, ?, ?)'
+                );
+                $stmt->execute([
+                    $tag,
+                    $name,
+                    trim((string)($data['category'] ?? '')),
+                    trim((string)($data['serial_number'] ?? '')),
+                    $status,
+                    $quantity,
+                    trim((string)($data['location'] ?? '')),
+                ]);
+                if ($image !== null) {
+                    $this->storeAssetImage($tag, $image);
+                    $imageStored = true;
+                    $this->pdo->commit();
+                }
+            } catch (Throwable $e) {
+                if ($this->pdo->inTransaction()) $this->pdo->rollBack();
+                if ($imageStored) $this->removeAssetImage($tag);
+                throw $e;
+            }
+            $this->audit->record($user, self::MODULE, 'Register Asset', $tag . ($image !== null ? ' (photo uploaded)' : ''));
+            return $image !== null ? 'Asset registered with its photo.' : 'Asset registered.';
         }
 
         if ($action === 'issue_asset') {
+            $image = $this->prepareAssetImage($files);
             $assetId = (int)($data['asset_id'] ?? 0);
             $employee = trim((string)($data['employee_name'] ?? ''));
             $issuedDate = trim((string)($data['issued_date'] ?? ''));
@@ -147,8 +161,20 @@ final class AssetEquipmentService {
                 throw $e;
             }
 
-            $this->audit->record($user, self::MODULE, 'Issue Equipment', 'Asset ID ' . $assetId);
-            return 'Equipment issued.';
+            $photoMessage = '';
+            if ($image !== null) {
+                try {
+                    $this->storeAssetImage((string)$asset['asset_tag'], $image);
+                    $photoMessage = ' Asset photo uploaded.';
+                } catch (Throwable $photoError) {
+                    // The issuance itself has already committed. Report the photo issue separately
+                    // rather than implying that the completed issuance failed and could be retried.
+                    error_log('Asset issuance photo upload failed: ' . $photoError->getMessage());
+                    $photoMessage = ' The item was issued, but its photo could not be saved; please retry the photo upload.';
+                }
+            }
+            $this->audit->record($user, self::MODULE, 'Issue Equipment', 'Asset ID ' . $assetId . ($image !== null ? ' (photo upload attempted)' : ''));
+            return 'Equipment issued.' . $photoMessage;
         }
 
         if ($action === 'update_issuance_status') {
@@ -243,6 +269,87 @@ final class AssetEquipmentService {
         }
 
         throw new RuntimeException('Unsupported Asset & Equipment action.');
+    }
+
+    /** Validate an optional image before changing an inventory or issuance record. */
+    private function prepareAssetImage(array $files): ?array {
+        $file = $files['asset_image'] ?? null;
+        if (!is_array($file)) return null;
+        $error = (int)($file['error'] ?? UPLOAD_ERR_NO_FILE);
+        if ($error === UPLOAD_ERR_NO_FILE) return null;
+        if ($error !== UPLOAD_ERR_OK) {
+            $message = match ($error) {
+                UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE => 'The asset image is too large. Choose an image no larger than 5 MB.',
+                UPLOAD_ERR_PARTIAL => 'The asset image did not upload completely. Please try again.',
+                UPLOAD_ERR_NO_TMP_DIR => 'The server upload temporary folder is unavailable.',
+                UPLOAD_ERR_CANT_WRITE => 'The server could not write the uploaded image.',
+                UPLOAD_ERR_EXTENSION => 'The server blocked this image upload.',
+                default => 'The asset image could not be uploaded. Please try again.',
+            };
+            throw new RuntimeException($message);
+        }
+
+        $tmp = (string)($file['tmp_name'] ?? '');
+        $size = (int)($file['size'] ?? 0);
+        if ($tmp === '' || !is_uploaded_file($tmp) || !is_readable($tmp)) {
+            throw new RuntimeException('The uploaded image is not valid. Please choose the image again.');
+        }
+        if ($size <= 0 || $size > 5 * 1024 * 1024) {
+            throw new RuntimeException('Asset images must be 5 MB or smaller.');
+        }
+
+        $mime = (new finfo(FILEINFO_MIME_TYPE))->file($tmp);
+        $extensions = [
+            'image/jpeg' => 'jpg',
+            'image/png' => 'png',
+            'image/webp' => 'webp',
+        ];
+        if (!isset($extensions[$mime]) || @getimagesize($tmp) === false) {
+            throw new RuntimeException('Unsupported image format. Upload a valid JPG, PNG, or WebP image.');
+        }
+        return ['tmp_name' => $tmp, 'extension' => $extensions[$mime]];
+    }
+
+    /** Photos are keyed by the unique asset tag, so the existing database schema stays unchanged. */
+    private function storeAssetImage(string $assetTag, array $image): void {
+        $extension = (string)($image['extension'] ?? '');
+        if (!in_array($extension, ['jpg', 'png', 'webp'], true)) {
+            throw new RuntimeException('Unsupported image format.');
+        }
+
+        $directory = __DIR__ . '/storage/asset_images';
+        if (!is_dir($directory) && !@mkdir($directory, 0750, true) && !is_dir($directory)) {
+            throw new RuntimeException('Asset image storage could not be created.');
+        }
+        if (!is_writable($directory)) {
+            throw new RuntimeException('Asset image storage is not writable by the application.');
+        }
+
+        $base = hash('sha256', strtoupper(trim($assetTag)));
+        $temporary = $directory . '/.' . $base . '.' . bin2hex(random_bytes(8)) . '.tmp';
+        if (!move_uploaded_file((string)($image['tmp_name'] ?? ''), $temporary)) {
+            throw new RuntimeException('The asset photo could not be saved. Check storage folder permissions.');
+        }
+        $destination = $directory . '/' . $base . '.' . $extension;
+        if (!@rename($temporary, $destination)) {
+            @unlink($temporary);
+            throw new RuntimeException('The asset photo could not be finalized. Please try again.');
+        }
+
+        foreach (['jpg', 'png', 'webp'] as $oldExtension) {
+            $old = $directory . '/' . $base . '.' . $oldExtension;
+            if ($oldExtension !== $extension && is_file($old)) @unlink($old);
+        }
+        @chmod($destination, 0640);
+    }
+
+    private function removeAssetImage(string $assetTag): void {
+        $directory = __DIR__ . '/storage/asset_images';
+        $base = hash('sha256', strtoupper(trim($assetTag)));
+        foreach (['jpg', 'png', 'webp'] as $extension) {
+            $path = $directory . '/' . $base . '.' . $extension;
+            if (is_file($path)) @unlink($path);
+        }
     }
 
     private static function isValidDate(string $value): bool {

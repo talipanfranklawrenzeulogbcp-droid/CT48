@@ -45,3 +45,10 @@
 - Confirmed all 12 rendered table tags are covered by the global sorter.
 - Confirmed both SQL schema files are byte-for-byte unchanged from the input archive.
 - Live browser, database, and Gemini API integration tests still require deployment configuration and were not run in this archive-only environment.
+
+## Asset photos, notifications, and feedback actions
+
+- Added optional asset photos to asset registration and the equipment issuance form (JPG, PNG, or WebP; up to 5 MB), including local preview, saved thumbnail display, and an authenticated image-serving endpoint. Photos are saved under `storage/asset_images` using a hashed asset tag, with no database schema changes.
+- Updated the user-menu notifications endpoint to refresh the role-scoped notification list as well as the unread badge. View and Reply actions now use escaped data attributes and event handlers, so feedback containing quotes or line breaks does not break the buttons.
+- Corrected notification read authorization for personal and broadcast notifications, and made repeated read actions safe. Feedback-management reply forms use deployment-aware action URLs and return to the Feedback Management page.
+- Verified PHP and JavaScript syntax. The existing SQL schema and migration scripts are unchanged; live database and browser interaction testing still depends on the deployed environment.

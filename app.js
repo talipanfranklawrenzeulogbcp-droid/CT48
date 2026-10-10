@@ -20,6 +20,10 @@ function refreshNotificationIndicator(){
  fetch(`${window.APP_BASE||''}/includes/notification_poll.php`,{credentials:'same-origin',headers:{'X-Requested-With':'XMLHttpRequest'}})
    .then(r=>r.ok?r.json():null).then(data=>{
      if(!data||!data.ok)return;
+     if(Array.isArray(data.notifications)){
+       if(window.CURRENT_USER?.role==='Administrator') window.ADMIN_NOTIFICATIONS=data.notifications;
+       else if(window.CURRENT_USER?.role==='Staff') window.STAFF_NOTIFICATIONS=data.notifications;
+     }
      const button=document.querySelector('.gw-user-button'); if(!button)return;
      let dot=button.querySelector('.notification-red-dot');
      if(Number(data.unread)>0){
@@ -68,43 +72,56 @@ function showNotificationModal(filter='all'){
  const filtered=notificationFilterData(notes,activeFilter,isStaff);
  const title=isStaff?'Notifications':'Admin Notifications';
  const subtitle=isStaff?'Replies to your feedback and system notifications.':'Staff feedback and system notifications.';
- const empty=activeFilter==='unread'?'No unread notifications.':activeFilter==='replied'?'No replied or seen feedback yet.':isStaff?'No notifications yet':'No staff feedback yet';
- 
+ const empty=activeFilter==='unread'?'No unread notifications.':activeFilter==='replied'?'No replied feedback yet.':isStaff?'No notifications yet':'No staff feedback yet';
+
  const body=filtered.length ? filtered.map(n=>{
    const unread=Number(n.is_read)===0;
-   const date=new Date(String(n.created_at).replace(' ','T'));
-   const when=isNaN(date.getTime())?escapeHtml(n.created_at||''):date.toLocaleString();
+   const date=new Date(String(n.created_at||'').replace(' ','T'));
+   const when=isNaN(date.getTime())?String(n.created_at||''):date.toLocaleString();
    const isFeedback=n.type==='feedback';
    const isReply=n.type==='feedback_reply';
-   const view=`<button type="button" class="gw-btn secondary" onclick="viewNotification(${Number(n.id)},${JSON.stringify(String(n.title||'Notification'))},${JSON.stringify(String(n.sender_name||'System'))},${JSON.stringify(String(n.sender_role||'System'))},${JSON.stringify(String(n.message||''))},${Number(n.is_read)===0?'true':'false'},${isStaff?'true':'false'})"><span class="material-symbols-outlined">visibility</span>View</button>`;
-   const reply=(window.CURRENT_USER?.role==='Administrator' && isFeedback) ? `<button type="button" class="gw-btn secondary" onclick="showFeedbackReply(${Number(n.id)},${JSON.stringify(String(n.sender_name||'Staff'))},${JSON.stringify(String(n.sender_role||'Staff'))},${JSON.stringify(String(n.message||''))})"><span class="material-symbols-outlined">reply</span>Reply</button>` : '';
-   const del=(window.CURRENT_USER?.role==='Administrator' && isFeedback) ? `<button type="button" class="notification-delete" title="Remove feedback" aria-label="Remove feedback" onclick="removeNotification(${Number(n.id)})"><span class="material-symbols-outlined">close</span></button>` : '';
+   const view=`<button type="button" class="gw-btn secondary" data-notification-view data-id="${Number(n.id)||0}" data-title="${escapeHtml(n.title||'Notification')}" data-sender-name="${escapeHtml(n.sender_name||'System')}" data-sender-role="${escapeHtml(n.sender_role||'System')}" data-message="${escapeHtml(n.message||'')}" data-type="${escapeHtml(n.type||'system')}" data-was-unread="${unread?'1':'0'}" data-is-staff="${isStaff?'1':'0'}"><span class="material-symbols-outlined">visibility</span> View</button>`;
+   const reply=(window.CURRENT_USER?.role==='Administrator' && isFeedback) ? `<button type="button" class="gw-btn secondary" data-notification-reply data-id="${Number(n.id)||0}" data-sender-name="${escapeHtml(n.sender_name||'Staff')}" data-sender-role="${escapeHtml(n.sender_role||'Staff')}" data-message="${escapeHtml(n.message||'')}"><span class="material-symbols-outlined">reply</span> Reply</button>` : '';
+   const del=(window.CURRENT_USER?.role==='Administrator' && isFeedback) ? `<button type="button" class="notification-delete" title="Remove feedback" aria-label="Remove feedback" data-notification-delete data-id="${Number(n.id)||0}"><span class="material-symbols-outlined">close</span></button>` : '';
    const status=isReply?'Admin reply':(isFeedback && Number(n.has_reply)===1?'Replied':(unread?'Unread':'Seen'));
    return `<div class="notification-card ${unread?'unread':''}">
      <div class="notification-card-head"><div><strong>${escapeHtml(n.title||'Notification')}</strong><span>${escapeHtml(n.sender_name||'System')} · ${escapeHtml(n.sender_role||'System')} · ${escapeHtml(status)}</span></div><small>${escapeHtml(when)}</small>${del}</div>
      <p>${escapeHtml(n.message||'')}</p><div class="notification-actions">${view}${reply}</div>
    </div>`;
  }).join('') : `<div class="notification-empty"><span class="material-symbols-outlined">notifications_none</span><strong>${empty}</strong><p>${escapeHtml(subtitle)}</p></div>`;
- const filters=!isStaff ? `<div class="notification-filters"><button class="gw-btn ${activeFilter==='all'?'primary':'secondary'}" onclick="showNotificationModal('all')">All</button><button class="gw-btn ${activeFilter==='unread'?'primary':'secondary'}" onclick="showNotificationModal('unread')">Unread</button><button class="gw-btn ${activeFilter==='replied'?'primary':'secondary'}" onclick="showNotificationModal('replied')">Replied</button></div>` : `<div class="notification-filters"><button class="gw-btn ${activeFilter==='all'?'primary':'secondary'}" onclick="showNotificationModal('all')">All</button><button class="gw-btn ${activeFilter==='unread'?'primary':'secondary'}" onclick="showNotificationModal('unread')">Unread</button></div>`;
- root.innerHTML=`<div class="gw-modal-backdrop" onclick="if(event.target===this)closeModal()"><div class="gw-modal notifications-modal">
-   <div class="gw-modal-head"><div><strong>${title}</strong><small>${subtitle}</small></div><button class="gw-modal-close" onclick="closeModal()" aria-label="Close">×</button></div>
-   <div class="gw-modal-body">${filters}<div class="notification-list">${body}</div><div class="record-actions"><button class="gw-btn primary" onclick="closeModal()">Close</button></div></div>
+ const filters=!isStaff ? `<div class="notification-filters"><button type="button" class="gw-btn ${activeFilter==='all'?'primary':'secondary'}" data-notification-filter="all">All</button><button type="button" class="gw-btn ${activeFilter==='unread'?'primary':'secondary'}" data-notification-filter="unread">Unread</button><button type="button" class="gw-btn ${activeFilter==='replied'?'primary':'secondary'}" data-notification-filter="replied">Replied</button></div>` : `<div class="notification-filters"><button type="button" class="gw-btn ${activeFilter==='all'?'primary':'secondary'}" data-notification-filter="all">All</button><button type="button" class="gw-btn ${activeFilter==='unread'?'primary':'secondary'}" data-notification-filter="unread">Unread</button></div>`;
+ root.innerHTML=`<div class="gw-modal-backdrop" data-close-modal-backdrop><div class="gw-modal notifications-modal">
+   <div class="gw-modal-head"><div><strong>${title}</strong><small>${subtitle}</small></div><button type="button" class="gw-modal-close" data-close-modal aria-label="Close">×</button></div>
+   <div class="gw-modal-body">${filters}<div class="notification-list">${body}</div><div class="record-actions"><button type="button" class="gw-btn primary" data-close-modal>Close</button></div></div>
  </div></div>`;
+ root.querySelector('[data-close-modal-backdrop]')?.addEventListener('click',event=>{if(event.target===event.currentTarget)closeModal();});
+ root.querySelectorAll('[data-close-modal]').forEach(button=>button.addEventListener('click',closeModal));
+ root.querySelectorAll('[data-notification-filter]').forEach(button=>button.addEventListener('click',()=>showNotificationModal(button.dataset.notificationFilter||'all')));
+ root.querySelectorAll('[data-notification-view]').forEach(button=>button.addEventListener('click',()=>viewNotification(
+   Number(button.dataset.id), button.dataset.title||'Notification', button.dataset.senderName||'System', button.dataset.senderRole||'System', button.dataset.message||'', button.dataset.wasUnread==='1', button.dataset.isStaff==='1', button.dataset.type||'system'
+ )));
+ root.querySelectorAll('[data-notification-reply]').forEach(button=>button.addEventListener('click',()=>showFeedbackReply(
+   Number(button.dataset.id), button.dataset.senderName||'Staff', button.dataset.senderRole||'Staff', button.dataset.message||''
+ )));
+ root.querySelectorAll('[data-notification-delete]').forEach(button=>button.addEventListener('click',()=>removeNotification(Number(button.dataset.id))));
 }
-function viewNotification(id,title,senderName,senderRole,message,wasUnread,isStaff){
+function viewNotification(id,title,senderName,senderRole,message,wasUnread,isStaff,type='system'){
  const notes=isStaff?(Array.isArray(window.STAFF_NOTIFICATIONS)?window.STAFF_NOTIFICATIONS:[]):(Array.isArray(window.ADMIN_NOTIFICATIONS)?window.ADMIN_NOTIFICATIONS:[]);
  const item=notes.find(n=>Number(n.id)===Number(id));
+ const detailTitle=isStaff?(type==='feedback_reply'?'Administrator Reply':'Notification Details'):(type==='feedback'?'Staff Feedback':'Notification Details');
+ const detailSubtitle=isStaff?(type==='feedback_reply'?'Reply details':'System notification details'):(type==='feedback'?'Staff feedback details':'System notification details');
+ const messageLabel=isStaff?(type==='feedback_reply'?'Administrator Reply':'Notification Message'):(type==='feedback'?'Staff Feedback':'Notification Message');
  const show=()=>{
    const root=document.getElementById('modalRoot'); if(!root)return;
    if(item) item.is_read=1;
    root.innerHTML=`<div class="gw-modal-backdrop" onclick="if(event.target===this)closeModal()"><div class="gw-modal notification-view-modal">
-    <div class="gw-modal-head"><div><strong>${isStaff?'Administrator Reply':'Staff Feedback'}</strong><small>${isStaff?'Reply details':'Feedback details'}</small></div><button class="gw-modal-close" onclick="closeModal()" aria-label="Close">×</button></div>
+    <div class="gw-modal-head"><div><strong>${escapeHtml(detailTitle)}</strong><small>${escapeHtml(detailSubtitle)}</small></div><button class="gw-modal-close" onclick="closeModal()" aria-label="Close">×</button></div>
     <div class="gw-modal-body">
       <div class="notification-detail-grid">
         <div class="notification-detail-field"><span>Name of Sender</span><strong>${escapeHtml(senderName||'Unknown')}</strong></div>
         <div class="notification-detail-field"><span>Role</span><strong>${escapeHtml(senderRole||'Unknown')}</strong></div>
       </div>
-      <div class="notification-detail-field notification-feedback-field"><span>${isStaff?'Administrator Reply':'Staff Feedback'}</span><div class="notification-full-message">${escapeHtml(message||'No feedback content was provided.')}</div></div>
+      <div class="notification-detail-field notification-feedback-field"><span>${escapeHtml(messageLabel)}</span><div class="notification-full-message">${escapeHtml(message||'No feedback content was provided.')}</div></div>
       <div class="record-actions"><button class="gw-btn primary" onclick="closeModal()">Close</button></div>
     </div>
    </div></div>`;
@@ -137,6 +154,14 @@ function showFeedbackSentModal(){
  </div></div>`;
 }
 
+function appRelativeReturnPath(){
+ const base=String(window.APP_BASE||'').replace(/\/+$/,'');
+ let path=String(window.location.pathname||'/dashboard.php');
+ if(base && (path===base || path.startsWith(base+'/'))) path=path.slice(base.length)||'/';
+ if(!path.startsWith('/')) path='/'+path;
+ return path+String(window.location.search||'');
+}
+
 function showFeedbackModal(replyContext=null){
  document.getElementById('userMenu')?.classList.remove('open');
  // Feedback submission is employee-only; administrators can respond through Notifications.
@@ -156,7 +181,7 @@ function showFeedbackModal(replyContext=null){
  <div class="gw-modal-body">
  ${replying?`<div class="feedback-reply-context"><strong>Original feedback from ${escapeHtml(recipientName)} (${escapeHtml(recipientRole)})</strong><p>${escapeHtml(original)}</p></div>`:`<div class="feedback-intro"><span class="material-symbols-outlined">rate_review</span><div><strong>Your account details are automatic</strong><p>Your name and role are taken from the account currently signed in.</p></div></div>`}
  <form method="post" action="${window.APP_BASE||''}/includes/feedback.php">
- <input type="hidden" name="csrf_token" value="${escapeHtml(window.CSRF_TOKEN||'')}"><input type="hidden" name="return_to" value="${escapeHtml(window.location.pathname + window.location.search)}">
+ <input type="hidden" name="csrf_token" value="${escapeHtml(window.CSRF_TOKEN||'')}"><input type="hidden" name="return_to" value="${escapeHtml(appRelativeReturnPath())}">
  ${replying?`<input type="hidden" name="action" value="reply"><input type="hidden" name="notification_id" value="${Number(replyContext.replyTo)}">`:''}
  <div class="feedback-account-grid"><div class="feedback-readonly-field"><label>${replying?'From':'Name'}</label><div class="feedback-readonly-value"><span class="material-symbols-outlined">person</span>${escapeHtml(user.name)}</div></div><div class="feedback-readonly-field"><label>${replying?'To':'Role'}</label><div class="feedback-readonly-value"><span class="material-symbols-outlined">${replying?'person':'badge'}</span>${escapeHtml(replying?recipientName:user.role)}</div></div></div>
  ${!replying?`<div class="form-grid feedback-classification"><div><label for="feedbackCategory">Category</label><select id="feedbackCategory" name="category" required><option>General Suggestion</option><option>System Bug</option><option>Feature Request</option><option>Workplace Concern</option><option>Security Concern</option><option>Other</option></select></div><div><label for="feedbackPriority">Priority</label><select id="feedbackPriority" name="priority" required><option>Low</option><option selected>Medium</option><option>High</option><option>Critical</option></select></div></div>`:''}
