@@ -3243,3 +3243,19 @@ th[aria-sort="descending"] .table-sort-indicator { opacity: 1; color: #6d28d9; }
   .table-wrap.table-scroll-five { max-height: 230px; }
   .data-table th, .data-table td { padding: 10px 11px; }
 }
+
+
+/* Asset photos — compact cards/thumbs aligned with the existing purple theme. */
+.asset-module-page .asset-photo-cell{width:76px;min-width:76px;text-align:center;vertical-align:middle;}
+.asset-module-page .asset-table-photo{display:block;width:54px;height:54px;object-fit:cover;border:1px solid var(--gw-border);border-radius:10px;background:#f8fafc;margin:0 auto;}
+.asset-module-page .asset-photo-placeholder{display:inline-flex;width:54px;height:54px;align-items:center;justify-content:center;border:1px dashed var(--gw-border);border-radius:10px;background:#faf8ff;color:#8b7db0;}
+.asset-module-page .asset-photo-placeholder .material-symbols-outlined{font-size:24px;}
+.asset-module-page .asset-image-upload-field{display:grid;gap:8px;min-width:0;padding:14px;border:1px dashed #cfc4ef;border-radius:12px;background:linear-gradient(135deg,#faf8ff,#fff);}
+.asset-module-page .asset-image-upload-field label{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px;color:var(--gw-text);font-weight:750;}
+.asset-module-page .asset-optional-label{font-size:10px;color:var(--gw-muted);font-weight:600;}
+.asset-module-page .asset-image-upload-field input[type=file]{width:100%;max-width:100%;border:1px solid var(--gw-border);border-radius:9px;padding:9px;background:#fff;color:var(--gw-text);font-size:12px;}
+.asset-module-page .asset-image-upload-field small{color:var(--gw-muted);font-size:11px;line-height:1.55;}
+.asset-module-page .asset-image-preview{display:flex;align-items:center;gap:12px;min-height:86px;padding:10px 12px;border-radius:10px;border:1px solid #ede9fe;background:#fff;color:var(--gw-muted);font-size:11px;}
+.asset-module-page .asset-image-preview .material-symbols-outlined{font-size:26px;color:#8b7db0;}
+.asset-module-page .asset-image-preview-photo{width:84px;height:64px;object-fit:cover;border-radius:8px;border:1px solid var(--gw-border);background:#f8fafc;}
+@media(max-width:560px){.asset-module-page .asset-image-upload-field{padding:10px}.asset-module-page .asset-image-preview-photo{width:72px;height:60px}}

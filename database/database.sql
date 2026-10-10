@@ -158,6 +158,8 @@ CREATE TABLE IF NOT EXISTS compliance_obligations (
  report_role VARCHAR(120) NULL,
  contact_no VARCHAR(60) NULL,
  compliance_note TEXT NULL,
+ report_document_path VARCHAR(500) NULL,
+ report_document_name VARCHAR(255) NULL,
  reported_at DATETIME NULL,
  category VARCHAR(120),
  owner VARCHAR(120),
