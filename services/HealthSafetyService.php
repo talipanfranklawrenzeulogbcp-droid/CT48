@@ -80,11 +80,11 @@ final class HealthSafetyService {
 
     public function incidents(?string $date=null): array {
         if($date && preg_match('/^\d{4}-\d{2}-\d{2}$/',$date)){
-            $s=$this->pdo->prepare('SELECT * FROM safety_incidents WHERE incident_date=? ORDER BY incident_date DESC,id DESC');
+            $s=$this->pdo->prepare('SELECT * FROM safety_incidents WHERE incident_date=? ORDER BY created_at DESC,id DESC');
             $s->execute([$date]);
             return $s->fetchAll();
         }
-        return $this->pdo->query('SELECT * FROM safety_incidents ORDER BY incident_date DESC,id DESC')->fetchAll();
+        return $this->pdo->query('SELECT * FROM safety_incidents ORDER BY created_at DESC,id DESC')->fetchAll();
     }
 
     public function incident(int $id): ?array {
