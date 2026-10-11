@@ -13,6 +13,25 @@ function is_records_entry_account(?array $user = null): bool {
     return strtolower(trim((string)($user['email'] ?? ''))) === 'records.entry@greatsolomonmpservices.com';
 }
 
+
+/** Incident reports are available to the two operational roles used by this app.
+ * The dedicated Records Entry account remains restricted to its existing workspace.
+ */
+function can_access_incident_reports(?array $user = null): bool {
+    $user = $user ?? current_user();
+    if (!$user || is_records_entry_account($user)) return false;
+    return in_array((string)($user['role'] ?? ''), ['Administrator', 'Staff'], true);
+}
+
+function require_incident_report_access(): void {
+    require_login();
+    if (!can_access_incident_reports()) {
+        http_response_code(403);
+        echo '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Access Denied</title></head><body style="font-family:Inter,Arial,sans-serif;padding:40px;color:#243247"><h1>Access Denied</h1><p>Incident reporting is available to authorized administrators and staff.</p><p><a href="'.htmlspecialchars(app_url('/dashboard.php'),ENT_QUOTES,'UTF-8').'">Return to dashboard</a></p></body></html>';
+        exit;
+    }
+}
+
 function app_base_path(): string {
     // Match CT44's deployment-aware addressing: support a configured mount
     // prefix and reverse-proxy prefixes, then derive the root from SCRIPT_NAME.

@@ -49,7 +49,7 @@ page_header('Reports, Analysis & Dashboard','dashboard'); show_flash(); ?>
 
 <?php
 $upcomingCompliance=[];
-try { $upcomingCompliance=db()->query("SELECT id,title,due_date,priority,status FROM compliance_obligations WHERE due_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY) AND status NOT IN ('Compliant') ORDER BY due_date ASC LIMIT 8")->fetchAll(); } catch(Throwable $e) { $upcomingCompliance=[]; }
+try { $upcomingCompliance=db()->query("SELECT id,title,due_date,priority,status FROM compliance_obligations WHERE report_name IS NULL AND due_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY) AND status NOT IN ('Compliant') ORDER BY due_date ASC LIMIT 8")->fetchAll(); } catch(Throwable $e) { $upcomingCompliance=[]; }
 ?>
 <section class="gw-content-grid dashboard-alert-grid">
 <article class="gw-panel"><div class="gw-panel-head"><div><h2>Upcoming compliance deadlines</h2><span>Open obligations due in the next 30 days</span></div><span class="material-symbols-outlined">event_upcoming</span></div><div class="dashboard-deadline-list">

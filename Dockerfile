@@ -31,7 +31,7 @@ RUN a2enmod headers rewrite \
         echo '        AllowOverride All'; \
         echo '        Options -Indexes +FollowSymLinks'; \
         echo '        Require all granted'; \
-        echo '        LimitRequestBody 33554432'; \
+        echo '        LimitRequestBody 52428800'; \
         echo '    </Directory>'; \
         echo '    ErrorLog /dev/stderr'; \
         echo '    CustomLog /dev/stdout combined'; \
@@ -45,8 +45,8 @@ RUN { \
         echo 'log_errors=On'; \
         echo 'error_log=/proc/self/fd/2'; \
         echo 'memory_limit=256M'; \
-        echo 'upload_max_filesize=16M'; \
-        echo 'post_max_size=32M'; \
+        echo 'upload_max_filesize=8M'; \
+        echo 'post_max_size=50M'; \
         echo 'max_file_uploads=20'; \
         echo 'max_input_time=120'; \
         echo 'max_execution_time=120'; \
@@ -70,7 +70,7 @@ RUN set -eux; \
     test -f /var/www/html/auth/login.php; \
     test -f /var/www/html/health.php; \
     apache2ctl -t; \
-    mkdir -p /var/www/html/storage/logs /var/www/html/storage/exports /var/www/html/storage/reports; \
+    mkdir -p /var/www/html/storage/logs /var/www/html/storage/exports /var/www/html/storage/reports /var/www/html/storage/health_safety/incidents; \
     chown -R www-data:www-data /var/www/html/storage; \
     chmod -R 0755 /var/www/html/storage; \
     rm -f /var/www/html/.env

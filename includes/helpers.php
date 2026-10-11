@@ -17,20 +17,36 @@ function url(string $path): string { return app_url($path); }
 function redirect(string $path): never { header('Location: '.url($path)); exit; }
 function admin_feedback_notifications(): array {
     try {
-        $stmt=db()->query("SELECT n.id, n.type, n.sender_name, n.sender_role, n.sender_user_id, n.reply_to_id, n.title, n.message, n.is_read, n.created_at, EXISTS(SELECT 1 FROM admin_notifications r WHERE r.type='feedback_reply' AND r.reply_to_id=n.id AND r.deleted_at IS NULL) AS has_reply FROM admin_notifications n WHERE n.deleted_at IS NULL AND n.type IN ('feedback','data_transfer') ORDER BY n.created_at DESC LIMIT 50");
+        $u = current_user();
+        if (!$u || ($u['role'] ?? '') !== 'Administrator') return [];
+        $stmt = db()->prepare("SELECT n.id, n.type, n.sender_name, n.sender_role, n.sender_user_id, n.reply_to_id, n.title, n.message, n.is_read, n.created_at,
+            EXISTS(SELECT 1 FROM admin_notifications r WHERE r.type='feedback_reply' AND r.reply_to_id=n.id AND r.deleted_at IS NULL) AS has_reply
+            FROM admin_notifications n
+            WHERE n.deleted_at IS NULL AND (n.type='feedback' OR (n.type='data_transfer' AND (n.user_id=? OR n.user_id IS NULL)))
+            ORDER BY n.created_at DESC, n.id DESC LIMIT 50");
+        $stmt->execute([(int)($u['id'] ?? 0)]);
         return $stmt->fetchAll();
-    } catch(Throwable $e) { return []; }
+    } catch (Throwable $e) {
+        error_log('Admin notification query failed: ' . $e->getMessage());
+        return [];
+    }
 }
 function staff_transfer_notifications(): array {
     try {
-        $u=current_user();
+        $u = current_user();
         if (!$u || ($u['role'] ?? '') !== 'Staff') return [];
-        $stmt=$pdo=db();
-        $q=$stmt->prepare("SELECT id, type, sender_name, sender_role, sender_user_id, reply_to_id, title, message, is_read, created_at FROM admin_notifications WHERE deleted_at IS NULL AND ((user_id=? AND type IN ('data_transfer','feedback_reply','file_release')) OR (user_id IS NULL AND type='data_transfer')) ORDER BY created_at DESC LIMIT 50");
+        $q = db()->prepare("SELECT id, type, sender_name, sender_role, sender_user_id, reply_to_id, title, message, is_read, created_at
+            FROM admin_notifications
+            WHERE deleted_at IS NULL AND ((user_id=? AND type IN ('data_transfer','feedback_reply','file_release')) OR (user_id IS NULL AND type='data_transfer'))
+            ORDER BY created_at DESC, id DESC LIMIT 50");
         $q->execute([(int)$u['id']]);
         return $q->fetchAll();
-    } catch(Throwable $e) { return []; }
+    } catch (Throwable $e) {
+        error_log('Staff notification query failed: ' . $e->getMessage());
+        return [];
+    }
 }
+function json_for_inline_script($value): string { return json_encode($value, JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_INVALID_UTF8_SUBSTITUTE) ?: 'null'; }
 function page_header(string $title,string $section=''): void {
 $u=current_user();
 $adminNotifications = (($u['role'] ?? '') === 'Administrator') ? admin_feedback_notifications() : [];
@@ -43,8 +59,8 @@ $staffNotifications = (($u['role'] ?? '') === 'Staff') ? staff_transfer_notifica
 <a class="module-link" href="<?=e(url('/modules/legal_compliance/manage_employee_documents.php'))?>"><button class="<?= $section==='legal'?'active':'' ?>"><span class="material-symbols-outlined">upload_file</span><span>Employee Document Upload</span></button></a>
 <?php else: ?><a class="module-link" href="<?=e(url('/dashboard.php'))?>"><button class="<?= $section==='dashboard'?'active':'' ?>"><span class="material-symbols-outlined">dashboard</span><span>Reports, Analysis &amp; Dashboard</span></button></a><a class="module-link" href="<?=e(url('/ai_assistant.php'))?>"><button class="<?= $section==='ai'?'active':'' ?>"><span class="material-symbols-outlined">auto_awesome</span><span>AI System Assistant</span><span class="nav-number">AI</span></button></a><a class="module-link" href="<?=e(url('/modules/health_safety/index.php'))?>"><button class="<?= $section==='health'?'active':'' ?>"><span class="material-symbols-outlined">health_and_safety</span><span>Health, Safety &amp; Welfare</span><span class="nav-number">1</span></button></a><a class="module-link" href="<?=e(url('/modules/legal_compliance/index.php'))?>"><button class="<?= $section==='legal'?'active':'' ?>"><span class="material-symbols-outlined">gavel</span><span>Legal &amp; Compliance</span><span class="nav-number">2</span></button></a><?php if (($u['role'] ?? '') === 'Administrator'): ?><a class="module-link" href="<?=e(url('/modules/system_admin_security/index.php'))?>"><button class="<?= $section==='security'?'active':'' ?>"><span class="material-symbols-outlined">admin_panel_settings</span><span>System Administration &amp; Security</span><span class="nav-number">3</span></button></a><?php endif; ?><a class="module-link" href="<?=e(url('/modules/asset_equipment/index.php'))?>"><button class="<?= $section==='assets'?'active':'' ?>"><span class="material-symbols-outlined">inventory_2</span><span>Asset &amp; Equipment Issuance</span><span class="nav-number">4</span></button></a><a class="module-link" href="<?=e(url('/tasks.php'))?>"><button class="<?= $section==='tasks'?'active':'' ?>"><span class="material-symbols-outlined">task_alt</span><span>Tasks &amp; Approvals</span><span class="nav-number">5</span></button></a><a class="module-link" href="<?=e(url('/modules/feedback/index.php'))?>"><button class="<?= $section==='feedback'?'active':'' ?>"><span class="material-symbols-outlined">forum</span><span>Feedback Management</span></button></a><?php endif; ?></nav><div class="gw-sidebar-footer"><div class="gw-status-dot"></div><div><strong>Welcome back, <?=e($u['name']??'User')?></strong><span><?=e($u['role']??'Staff')?></span></div></div></aside><div class="gw-shell"><header class="gw-topbar"><div class="gw-topbar-left"><button id="sidebarToggle" class="icon-btn" title="Toggle sidebar"><span class="material-symbols-outlined">menu_open</span></button><div class="gw-topbar-title"><span class="eyebrow">SERVICE MANAGEMENT &amp; ENTERPRISE RESOURCE SYSTEM</span><strong><?=e($title)?></strong></div></div><div class="gw-user user-menu-wrap">
 <button type="button" class="gw-user-button" onclick="toggleUserMenu()" aria-expanded="false">
-<?php $hasFeedbackUnread = (($u['role'] ?? '') === 'Administrator') ? (bool)count(array_filter($adminNotifications,fn($n)=>(int)$n['is_read']===0 && $n['type']==='feedback')) : (bool)count(array_filter($staffNotifications,fn($n)=>(int)$n['is_read']===0 && $n['type']==='feedback_reply')); ?>
-<?php if($hasFeedbackUnread): ?><span class="notification-red-dot" aria-label="New notification"></span><?php endif; ?>
+<?php $hasNotificationUnread = (($u['role'] ?? '') === 'Administrator') ? (bool)count(array_filter($adminNotifications,fn($n)=>(int)$n['is_read']===0)) : (bool)count(array_filter($staffNotifications,fn($n)=>(int)$n['is_read']===0)); ?>
+<?php if($hasNotificationUnread): ?><span class="notification-red-dot" aria-label="New notification"></span><?php endif; ?>
 <div class="gw-avatar"><?=e(strtoupper(substr((string)($u['name']??'AU'),0,2)))?></div>
 <div class="gw-user-copy"><strong><?=e($u['name']??'Admin User')?></strong><span><?=e($u['role']??'Administrator')?></span></div>
 <span class="material-symbols-outlined user-chevron">expand_more</span>
@@ -62,5 +78,5 @@ $staffNotifications = (($u['role'] ?? '') === 'Staff') ? staff_transfer_notifica
 </div>
 </div></header><main class="gw-main"><div class="page-shell">
 <?php }
-function page_footer(): void { $u=current_user() ?: []; $feedbackSent=!empty($_SESSION['feedback_sent']); unset($_SESSION['feedback_sent']); $path=(string)($_SERVER['SCRIPT_NAME']??''); $showModuleTop=str_contains($path,'/modules/health_safety/') || str_contains($path,'/modules/legal_compliance/') || str_contains($path,'/modules/system_admin_security/') || str_contains($path,'/modules/asset_equipment/'); echo '</div></main></div>'.($showModuleTop ? '<button id="moduleTopButton" class="module-top-button" type="button" aria-label="Go to top" title="Go to top"><span class="material-symbols-outlined">arrow_upward</span></button>' : '').'<div id="modalRoot"></div><script>window.APP_BASE='.json_encode(base_url()).';window.CURRENT_USER='.json_encode(["name"=>(string)($u["name"]??"User"),"role"=>(string)($u["role"]??"Staff")],JSON_UNESCAPED_SLASHES).';window.ADMIN_NOTIFICATIONS='.json_encode((($u["role"]??"") === "Administrator") ? admin_feedback_notifications() : [],JSON_UNESCAPED_SLASHES).';window.STAFF_NOTIFICATIONS='.json_encode((($u["role"]??"") === "Staff") ? staff_transfer_notifications() : [],JSON_UNESCAPED_SLASHES).';window.FEEDBACK_SENT='.json_encode($feedbackSent).';window.CSRF_TOKEN='.json_encode(csrf_token()).';window.CURRENT_PATH='.json_encode($_SERVER['REQUEST_URI']??'').';</script><script src="'.e(url('/app.js?v='.substr(sha1_file(__DIR__.'/../app.js'),0,12))).'"></script></body></html>'; }
+function page_footer(): void { $u=current_user() ?: []; $feedbackSent=!empty($_SESSION['feedback_sent']); unset($_SESSION['feedback_sent']); $path=(string)($_SERVER['SCRIPT_NAME']??''); $showModuleTop=str_contains($path,'/modules/health_safety/') || str_contains($path,'/modules/legal_compliance/') || str_contains($path,'/modules/system_admin_security/') || str_contains($path,'/modules/asset_equipment/'); echo '</div></main></div>'.($showModuleTop ? '<button id="moduleTopButton" class="module-top-button" type="button" aria-label="Go to top" title="Go to top"><span class="material-symbols-outlined">arrow_upward</span></button>' : '').'<div id="modalRoot"></div><script>window.APP_BASE='.json_for_inline_script(base_url()).';window.CURRENT_USER='.json_for_inline_script(["name"=>(string)($u["name"]??"User"),"role"=>(string)($u["role"]??"Staff")]).';window.ADMIN_NOTIFICATIONS='.json_for_inline_script((($u["role"]??"") === "Administrator") ? admin_feedback_notifications() : []).';window.STAFF_NOTIFICATIONS='.json_for_inline_script((($u["role"]??"") === "Staff") ? staff_transfer_notifications() : []).';window.FEEDBACK_SENT='.json_for_inline_script($feedbackSent).';window.CSRF_TOKEN='.json_for_inline_script(csrf_token()).';window.CURRENT_PATH='.json_for_inline_script($_SERVER['REQUEST_URI']??'').';</script><script src="'.e(url('/app.js?v='.substr(sha1_file(__DIR__.'/../app.js'),0,12))).'"></script></body></html>'; }
 function module_card(string $href,string $icon,string $title,string $desc): void { echo '<a class="module-link" href="'.e($href).'"><div class="gw-sub-card"><div class="mini-icon"><span class="material-symbols-outlined">'.e($icon).'</span></div><strong>'.e($title).'</strong><span>'.e($desc).'</span><span class="arrow"><span class="material-symbols-outlined">arrow_forward</span></span></div></a>'; }
