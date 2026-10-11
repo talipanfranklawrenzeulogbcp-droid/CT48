@@ -1,7 +1,80 @@
 <?php
 final class HealthSafetyService {
     private const MODULE='Health, Safety & Welfare';
-    public function __construct(private PDO $pdo, private AuditService $audit) {}
+    public function __construct(private PDO $pdo, private AuditService $audit) {
+        $this->ensureIncidentColumns();
+    }
+
+    /**
+     * Additive runtime migration: existing incident rows and all other tables are preserved.
+     */
+    private function ensureIncidentColumns(): void {
+        $columns = [
+            'incident_time' => 'VARCHAR(8) NULL',
+            'location' => 'VARCHAR(180) NULL',
+            'incident_type' => 'VARCHAR(100) NULL',
+            'employee_id' => 'VARCHAR(80) NULL',
+            'injury_details' => 'TEXT NULL',
+            'body_part_affected' => 'VARCHAR(180) NULL',
+            'witnesses' => 'TEXT NULL',
+            'immediate_action' => 'TEXT NULL',
+            'root_cause' => 'TEXT NULL',
+            'corrective_action' => 'TEXT NULL',
+            'reported_by' => 'VARCHAR(120) NULL',
+            'supervisor_name' => 'VARCHAR(120) NULL',
+            'lost_time' => 'VARCHAR(80) NULL',
+            'attachment_paths' => 'LONGTEXT NULL'
+        ];
+        try {
+            $existing = [];
+            foreach ($this->pdo->query('SHOW COLUMNS FROM safety_incidents')->fetchAll(PDO::FETCH_ASSOC) as $col) {
+                $existing[$col['Field']] = true;
+            }
+            foreach ($columns as $name => $definition) {
+                if (!isset($existing[$name])) {
+                    $this->pdo->exec("ALTER TABLE safety_incidents ADD COLUMN `$name` $definition");
+                }
+            }
+        } catch (Throwable $e) {
+            // Do not prevent read-only use if the DB account cannot perform migrations.
+            // A subsequent incident save will report a useful database error if columns are missing.
+        }
+    }
+
+    private function saveIncidentAttachments(): array {
+        if (empty($_FILES['attachments']) || !is_array($_FILES['attachments']['name'] ?? null)) return [];
+        $base = dirname(__DIR__) . '/storage/health_safety/incidents';
+        if (!is_dir($base) && !mkdir($base, 0750, true) && !is_dir($base)) {
+            throw new RuntimeException('Server storage for incident attachments could not be created.');
+        }
+        $allowed = ['image/jpeg'=>'jpg', 'image/png'=>'png', 'image/webp'=>'webp', 'application/pdf'=>'pdf'];
+        $finfo = new finfo(FILEINFO_MIME_TYPE);
+        $saved = [];
+        $names = $_FILES['attachments']['name'];
+        $count = count($names);
+        if ($count > 5) throw new RuntimeException('Attach no more than 5 files.');
+        try {
+            for ($i = 0; $i < $count; $i++) {
+                $error = $_FILES['attachments']['error'][$i] ?? UPLOAD_ERR_NO_FILE;
+                if ($error === UPLOAD_ERR_NO_FILE) continue;
+                if ($error !== UPLOAD_ERR_OK) throw new RuntimeException('An attachment failed to upload. Each file must be 8 MB or smaller.');
+                $tmp = $_FILES['attachments']['tmp_name'][$i] ?? '';
+                $size = (int)($_FILES['attachments']['size'][$i] ?? 0);
+                if ($size < 1 || $size > 8 * 1024 * 1024 || !is_uploaded_file($tmp)) {
+                    throw new RuntimeException('Each attachment must be a valid upload no larger than 8 MB.');
+                }
+                $mime = $finfo->file($tmp);
+                if (!isset($allowed[$mime])) throw new RuntimeException('Attachments must be JPG, PNG, WEBP images or PDF files.');
+                $stored = bin2hex(random_bytes(16)) . '.' . $allowed[$mime];
+                if (!move_uploaded_file($tmp, $base . '/' . $stored)) throw new RuntimeException('Unable to store an incident attachment on the server.');
+                $saved[] = 'storage/health_safety/incidents/' . $stored;
+            }
+        } catch (Throwable $e) {
+            foreach ($saved as $relative) @unlink(dirname(__DIR__) . '/' . $relative);
+            throw $e;
+        }
+        return $saved;
+    }
 
     public function pdoForReporting(): PDO { return $this->pdo; }
 
@@ -33,13 +106,40 @@ return ['incidents'=>$i,'open_incidents'=>$o,'health_records'=>$h];
     public function handle(string $action, array $data, ?array $user): string {
         if($action==='add_incident'){
             $title=trim((string)($data['title']??'')); $employee=trim((string)($data['employee_name']??''));
-            if($title===''||$employee===''||empty($data['incident_date'])) throw new RuntimeException('Title, employee and incident date are required.');
+            $date=(string)($data['incident_date']??'');
+            if($title===''||$employee===''||!preg_match('/^\\d{4}-\\d{2}-\\d{2}$/',$date)) throw new RuntimeException('Incident title, involved person and a valid incident date are required.');
             $severity=(string)($data['severity']??'Medium'); $status=(string)($data['status']??'Open');
             if(!in_array($severity,['Low','Medium','High','Critical'],true)) throw new RuntimeException('Invalid severity.');
             if(!in_array($status,['Open','Under Investigation','Closed'],true)) throw new RuntimeException('Invalid status.');
-            $s=$this->pdo->prepare('INSERT INTO safety_incidents(title,employee_name,incident_date,severity,status,description) VALUES(?,?,?,?,?,?)');
-            $s->execute([$title,$employee,$data['incident_date'],$severity,$status,trim((string)($data['description']??''))]);
-            $this->audit->record($user,self::MODULE,'Create Incident',$title); return 'Safety incident saved.';
+            $type=(string)($data['incident_type']??'Other');
+            $types=['Near Miss','Injury','Illness','Property Damage','Environmental','Unsafe Condition','Fire','Other'];
+            if(!in_array($type,$types,true)) throw new RuntimeException('Invalid incident type.');
+            $attachments=$this->saveIncidentAttachments();
+            try {
+                $sql='INSERT INTO safety_incidents(title,employee_name,incident_date,severity,status,description,incident_time,location,incident_type,employee_id,injury_details,body_part_affected,witnesses,immediate_action,root_cause,corrective_action,reported_by,supervisor_name,lost_time,attachment_paths) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)';
+                $s=$this->pdo->prepare($sql);
+                $s->execute([
+                    $title,$employee,$date,$severity,$status,trim((string)($data['description']??'')),
+                    trim((string)($data['incident_time']??'')) ?: null,
+                    trim((string)($data['location']??'')) ?: null,$type,
+                    trim((string)($data['employee_id']??'')) ?: null,
+                    trim((string)($data['injury_details']??'')) ?: null,
+                    trim((string)($data['body_part_affected']??'')) ?: null,
+                    trim((string)($data['witnesses']??'')) ?: null,
+                    trim((string)($data['immediate_action']??'')) ?: null,
+                    trim((string)($data['root_cause']??'')) ?: null,
+                    trim((string)($data['corrective_action']??'')) ?: null,
+                    trim((string)($data['reported_by']??($user['name']??''))) ?: null,
+                    trim((string)($data['supervisor_name']??'')) ?: null,
+                    trim((string)($data['lost_time']??'')) ?: null,
+                    $attachments ? json_encode($attachments, JSON_UNESCAPED_SLASHES) : null
+                ]);
+            } catch (Throwable $e) {
+                foreach ($attachments as $relative) @unlink(dirname(__DIR__) . '/' . $relative);
+                throw $e;
+            }
+            $this->audit->record($user,self::MODULE,'Create Incident',$title);
+            return 'Incident report saved with '.count($attachments).' attachment(s).';
         }
         if($action==='delete_incident'){
             $id=(int)($data['id']??0); if($id<=0) throw new RuntimeException('Invalid incident.');

@@ -70,7 +70,7 @@ RUN set -eux; \
     test -f /var/www/html/auth/login.php; \
     test -f /var/www/html/health.php; \
     apache2ctl -t; \
-    mkdir -p /var/www/html/storage/logs /var/www/html/storage/exports /var/www/html/storage/reports; \
+    mkdir -p /var/www/html/storage/logs /var/www/html/storage/exports /var/www/html/storage/reports /var/www/html/storage/health_safety/incidents; \
     chown -R www-data:www-data /var/www/html/storage; \
     chmod -R 0755 /var/www/html/storage; \
     rm -f /var/www/html/.env
