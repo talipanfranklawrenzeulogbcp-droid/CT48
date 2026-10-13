@@ -20,11 +20,18 @@ CREATE TABLE IF NOT EXISTS admin_notifications (
  sender_name VARCHAR(120) NULL,
  sender_role VARCHAR(60) NULL,
  sender_user_id INT UNSIGNED NULL,
+ category VARCHAR(40) NULL,
+ rating TINYINT UNSIGNED NULL,
+ parent_id BIGINT UNSIGNED NULL,
+ status VARCHAR(20) NOT NULL DEFAULT 'open',
  reply_to_id BIGINT UNSIGNED NULL,
  is_read TINYINT(1) NOT NULL DEFAULT 0,
+ is_dismissed TINYINT(1) NOT NULL DEFAULT 0,
  deleted_at DATETIME NULL,
  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
- INDEX(user_id), INDEX(type), INDEX(is_read), INDEX(created_at),
+ INDEX(user_id), INDEX(type), INDEX(is_read), INDEX(is_dismissed), INDEX(created_at),
+ INDEX idx_notification_parent (parent_id), INDEX idx_notification_reply_to (reply_to_id), INDEX idx_notification_deleted (deleted_at),
+ INDEX idx_notification_inbox (user_id,is_dismissed,is_read,created_at),
  CONSTRAINT fk_notification_user FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB;
 ALTER TABLE admin_notifications ADD COLUMN IF NOT EXISTS sender_user_id INT UNSIGNED NULL AFTER sender_role;
@@ -62,7 +69,7 @@ CREATE TABLE IF NOT EXISTS login_history (
  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
  user_id INT UNSIGNED NULL,
  email VARCHAR(190) NOT NULL,
- status ENUM('Success','Failed','OTP Pending') NOT NULL,
+ status VARCHAR(40) NOT NULL,
  ip_address VARCHAR(45) NULL,
  user_agent VARCHAR(500) NULL,
  login_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -245,20 +252,28 @@ INSERT INTO users(name,email,password_hash,role,active) VALUES
 ('Staff','ct4staff@gmail.com','$2y$12$W3CxFvVU6NqcmG5VEempMeY4/gfboeUJdjQgxrzfLtgNCiFpDShQu','Staff',1)
 ON DUPLICATE KEY UPDATE email=VALUES(email);
 
-INSERT INTO safety_incidents(title,employee_name,incident_date,severity,status,description) VALUES
-('Safety inspection finding','Juan Dela Cruz',CURDATE(),'Medium','Open','Initial sample incident for the database.'),
-('Minor workplace injury','Maria Santos',DATE_SUB(CURDATE(),INTERVAL 2 DAY),'Low','Closed','Sample closed incident.');
-INSERT INTO health_records(employee_name,checkup_date,record_type,fitness_status,notes) VALUES
-('Juan Dela Cruz',CURDATE(),'Annual Checkup','Fit','Sample health record.');
-INSERT INTO compliance_obligations(title,category,owner,due_date,priority,status) VALUES
-('Annual workplace compliance review','Regulatory','Compliance Officer',DATE_ADD(CURDATE(),INTERVAL 30 DAY),'High','Open'),
-('Permit renewal','Permit','Administration',DATE_ADD(CURDATE(),INTERVAL 10 DAY),'Medium','In Progress');
-INSERT INTO compliance_audits(title,audit_date,auditor,status,findings) VALUES
-('Annual compliance audit',DATE_ADD(CURDATE(),INTERVAL 7 DAY),'Internal Audit','Scheduled','Sample audit schedule.');
+INSERT INTO safety_incidents(title,employee_name,incident_date,severity,status,description)
+SELECT 'Safety inspection finding','Juan Dela Cruz',CURDATE(),'Medium','Open','Initial sample incident for the database.'
+WHERE NOT EXISTS (SELECT 1 FROM safety_incidents WHERE title='Safety inspection finding' AND employee_name='Juan Dela Cruz');
+INSERT INTO safety_incidents(title,employee_name,incident_date,severity,status,description)
+SELECT 'Minor workplace injury','Maria Santos',DATE_SUB(CURDATE(),INTERVAL 2 DAY),'Low','Closed','Sample closed incident.'
+WHERE NOT EXISTS (SELECT 1 FROM safety_incidents WHERE title='Minor workplace injury' AND employee_name='Maria Santos');
+INSERT INTO health_records(employee_name,checkup_date,record_type,fitness_status,notes)
+SELECT 'Juan Dela Cruz',CURDATE(),'Annual Checkup','Fit','Sample health record.'
+WHERE NOT EXISTS (SELECT 1 FROM health_records WHERE employee_name='Juan Dela Cruz' AND record_type='Annual Checkup' AND checkup_date=CURDATE());
+INSERT INTO compliance_obligations(title,category,owner,due_date,priority,status)
+SELECT 'Annual workplace compliance review','Regulatory','Compliance Officer',DATE_ADD(CURDATE(),INTERVAL 30 DAY),'High','Open'
+WHERE NOT EXISTS (SELECT 1 FROM compliance_obligations WHERE title='Annual workplace compliance review');
+INSERT INTO compliance_obligations(title,category,owner,due_date,priority,status)
+SELECT 'Permit renewal','Permit','Administration',DATE_ADD(CURDATE(),INTERVAL 10 DAY),'Medium','In Progress'
+WHERE NOT EXISTS (SELECT 1 FROM compliance_obligations WHERE title='Permit renewal');
+INSERT INTO compliance_audits(title,audit_date,auditor,status,findings)
+SELECT 'Annual compliance audit',DATE_ADD(CURDATE(),INTERVAL 7 DAY),'Internal Audit','Scheduled','Sample audit schedule.'
+WHERE NOT EXISTS (SELECT 1 FROM compliance_audits WHERE title='Annual compliance audit');
 INSERT INTO assets(asset_tag,name,category,serial_number,status,quantity,location) VALUES
 ('AST-0001','Laptop - Admin','Computer','SN-GSMS-0001','Issued',1,'Head Office'),
 ('AST-0002','Desktop Workstation','Computer','SN-GSMS-0002','Available',1,'Head Office')
-ON DUPLICATE KEY UPDATE asset_tag=VALUES(asset_tag);
+ON DUPLICATE KEY UPDATE asset_tag=asset_tag;
 INSERT INTO asset_issuances(asset_id,employee_name,issued_date,expected_return,status,notes)
 SELECT id,'Admin User',CURDATE(),DATE_ADD(CURDATE(),INTERVAL 365 DAY),'Issued','Sample issuance.'
 FROM assets WHERE asset_tag='AST-0001'
@@ -269,7 +284,7 @@ INSERT INTO assets(asset_tag,name,category,serial_number,status,quantity,locatio
 ('AST-0004','Company Tablet','Mobile Device','SN-GSMS-0004','Available',1,'Head Office'),
 ('AST-0005','Projector','Presentation','SN-GSMS-0005','Issued',1,'Training Room'),
 ('AST-0006','Office Laptop','Computer','SN-GSMS-0006','Available',1,'Operations')
-ON DUPLICATE KEY UPDATE asset_tag=VALUES(asset_tag);
+ON DUPLICATE KEY UPDATE asset_tag=asset_tag;
 INSERT INTO asset_issuances(asset_id,employee_name,issued_date,expected_return,status,notes)
 SELECT id,'Maria Santos',DATE_SUB(CURDATE(),INTERVAL 5 DAY),DATE_ADD(CURDATE(),INTERVAL 10 DAY),'Returned','Demo returned issuance.'
 FROM assets WHERE asset_tag='AST-0004'

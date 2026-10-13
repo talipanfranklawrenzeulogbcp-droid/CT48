@@ -20,21 +20,26 @@ CREATE TABLE IF NOT EXISTS admin_notifications (
  sender_name VARCHAR(120) NULL,
  sender_role VARCHAR(60) NULL,
  sender_user_id INT UNSIGNED NULL,
+ category VARCHAR(40) NULL,
+ rating TINYINT UNSIGNED NULL,
+ parent_id BIGINT UNSIGNED NULL,
+ status VARCHAR(20) NOT NULL DEFAULT 'open',
+ reply_to_id BIGINT UNSIGNED NULL,
  is_read TINYINT(1) NOT NULL DEFAULT 0,
+ is_dismissed TINYINT(1) NOT NULL DEFAULT 0,
+ deleted_at DATETIME NULL,
  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
- INDEX(user_id), INDEX(type), INDEX(is_read), INDEX(created_at),
+ INDEX(user_id), INDEX(type), INDEX(is_read), INDEX(is_dismissed), INDEX(created_at),
+ INDEX idx_notification_parent (parent_id), INDEX idx_notification_reply_to (reply_to_id), INDEX idx_notification_deleted (deleted_at),
+ INDEX idx_notification_inbox (user_id,is_dismissed,is_read,created_at),
  CONSTRAINT fk_notification_user FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB;
 ALTER TABLE admin_notifications ADD COLUMN IF NOT EXISTS sender_user_id INT UNSIGNED NULL AFTER sender_role;
+ALTER TABLE admin_notifications ADD COLUMN IF NOT EXISTS reply_to_id BIGINT UNSIGNED NULL AFTER sender_user_id;
+ALTER TABLE admin_notifications ADD COLUMN IF NOT EXISTS deleted_at DATETIME NULL AFTER is_read;
 ALTER TABLE admin_notifications ADD INDEX IF NOT EXISTS idx_notification_sender_user (sender_user_id);
--- Notification & feedback upgrade (additive; existing rows are preserved)
-ALTER TABLE admin_notifications ADD COLUMN IF NOT EXISTS category VARCHAR(40) NULL AFTER message;
-ALTER TABLE admin_notifications ADD COLUMN IF NOT EXISTS rating TINYINT UNSIGNED NULL AFTER category;
-ALTER TABLE admin_notifications ADD COLUMN IF NOT EXISTS parent_id BIGINT UNSIGNED NULL AFTER rating;
-ALTER TABLE admin_notifications ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'open' AFTER parent_id;
-ALTER TABLE admin_notifications ADD COLUMN IF NOT EXISTS is_dismissed TINYINT(1) NOT NULL DEFAULT 0 AFTER is_read;
-ALTER TABLE admin_notifications ADD INDEX IF NOT EXISTS idx_notification_parent (parent_id);
-ALTER TABLE admin_notifications ADD INDEX IF NOT EXISTS idx_notification_inbox (user_id,is_dismissed,is_read,created_at);
+ALTER TABLE admin_notifications ADD INDEX IF NOT EXISTS idx_notification_reply_to (reply_to_id);
+ALTER TABLE admin_notifications ADD INDEX IF NOT EXISTS idx_notification_deleted (deleted_at);
 CREATE TABLE IF NOT EXISTS archive_items (
  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
  item_type VARCHAR(40) NOT NULL,
@@ -64,7 +69,7 @@ CREATE TABLE IF NOT EXISTS login_history (
  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
  user_id INT UNSIGNED NULL,
  email VARCHAR(190) NOT NULL,
- status ENUM('Success','Failed','OTP Pending') NOT NULL,
+ status VARCHAR(40) NOT NULL,
  ip_address VARCHAR(45) NULL,
  user_agent VARCHAR(500) NULL,
  login_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -116,6 +121,43 @@ CREATE TABLE IF NOT EXISTS health_records (
  notes TEXT,
  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
+-- Extended employee health information; additive migration preserves existing records.
+ALTER TABLE health_records ADD COLUMN IF NOT EXISTS employee_id VARCHAR(80) NULL;
+ALTER TABLE health_records ADD COLUMN IF NOT EXISTS blood_pressure VARCHAR(40) NULL;
+ALTER TABLE health_records ADD COLUMN IF NOT EXISTS temperature DECIMAL(4,1) NULL;
+ALTER TABLE health_records ADD COLUMN IF NOT EXISTS allergies TEXT NULL;
+ALTER TABLE health_records ADD COLUMN IF NOT EXISTS medical_conditions TEXT NULL;
+ALTER TABLE health_records ADD COLUMN IF NOT EXISTS medications TEXT NULL;
+ALTER TABLE health_records ADD COLUMN IF NOT EXISTS lab_results TEXT NULL;
+ALTER TABLE health_records ADD COLUMN IF NOT EXISTS restrictions TEXT NULL;
+ALTER TABLE health_records ADD COLUMN IF NOT EXISTS next_review_date DATE NULL;
+ALTER TABLE health_records ADD COLUMN IF NOT EXISTS clinician_name VARCHAR(120) NULL;
+ALTER TABLE health_records ADD COLUMN IF NOT EXISTS confidential_notes TEXT NULL;
+ALTER TABLE health_records ADD COLUMN IF NOT EXISTS height_cm DECIMAL(5,1) NULL;
+ALTER TABLE health_records ADD COLUMN IF NOT EXISTS weight_kg DECIMAL(5,1) NULL;
+ALTER TABLE health_records ADD COLUMN IF NOT EXISTS bmi DECIMAL(5,1) NULL;
+
+CREATE TABLE IF NOT EXISTS employee_document_records (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+ health_record_id INT UNSIGNED NULL,
+ employee_name VARCHAR(120) NOT NULL,
+ document_name VARCHAR(180) NOT NULL,
+ category VARCHAR(80) NOT NULL DEFAULT 'Recruitment',
+ required_flag TINYINT(1) NOT NULL DEFAULT 1,
+ status ENUM('Missing','Requested','Received','Verified','Expired','Not Applicable') NOT NULL DEFAULT 'Missing',
+ issue_date DATE NULL,
+ expiry_date DATE NULL,
+ reference_no VARCHAR(120) NULL,
+ document_path VARCHAR(500) NULL,
+ uploaded_file_name VARCHAR(255) NULL,
+ notes TEXT NULL,
+ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+ INDEX(employee_name), INDEX(status), INDEX(health_record_id),
+ UNIQUE KEY uq_health_document (health_record_id, document_name),
+ CONSTRAINT fk_document_health_record FOREIGN KEY(health_record_id) REFERENCES health_records(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+
 CREATE TABLE IF NOT EXISTS health_safety_files (
  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
  employee_name VARCHAR(120) NOT NULL,
@@ -231,18 +273,18 @@ WHERE NOT EXISTS (SELECT 1 FROM compliance_audits WHERE title='Annual compliance
 INSERT INTO assets(asset_tag,name,category,serial_number,status,quantity,location) VALUES
 ('AST-0001','Laptop - Admin','Computer','SN-GSMS-0001','Issued',1,'Head Office'),
 ('AST-0002','Desktop Workstation','Computer','SN-GSMS-0002','Available',1,'Head Office')
-ON DUPLICATE KEY UPDATE asset_tag=VALUES(asset_tag);
+ON DUPLICATE KEY UPDATE asset_tag=asset_tag;
 INSERT INTO asset_issuances(asset_id,employee_name,issued_date,expected_return,status,notes)
 SELECT id,'Admin User',CURDATE(),DATE_ADD(CURDATE(),INTERVAL 365 DAY),'Issued','Sample issuance.'
 FROM assets WHERE asset_tag='AST-0001'
-AND NOT EXISTS (SELECT 1 FROM asset_issuances i JOIN assets a ON a.id=i.asset_id WHERE a.asset_tag='AST-0001' AND i.employee_name='Admin User');
+AND NOT EXISTS (SELECT 1 FROM asset_issuances i WHERE i.asset_id=assets.id AND i.employee_name='Admin User');
 
 -- Additional demo issuance history records
 INSERT INTO assets(asset_tag,name,category,serial_number,status,quantity,location) VALUES
 ('AST-0004','Company Tablet','Mobile Device','SN-GSMS-0004','Available',1,'Head Office'),
 ('AST-0005','Projector','Presentation','SN-GSMS-0005','Issued',1,'Training Room'),
 ('AST-0006','Office Laptop','Computer','SN-GSMS-0006','Available',1,'Operations')
-ON DUPLICATE KEY UPDATE asset_tag=VALUES(asset_tag);
+ON DUPLICATE KEY UPDATE asset_tag=asset_tag;
 INSERT INTO asset_issuances(asset_id,employee_name,issued_date,expected_return,status,notes)
 SELECT id,'Maria Santos',DATE_SUB(CURDATE(),INTERVAL 5 DAY),DATE_ADD(CURDATE(),INTERVAL 10 DAY),'Returned','Demo returned issuance.'
 FROM assets WHERE asset_tag='AST-0004'
@@ -265,4 +307,25 @@ CREATE TABLE IF NOT EXISTS data_storage (
  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
  INDEX(uploaded_by), INDEX(created_at),
  CONSTRAINT fk_storage_user FOREIGN KEY(uploaded_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+
+CREATE TABLE IF NOT EXISTS workflow_tasks (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+ title VARCHAR(180) NOT NULL,
+ description TEXT NULL,
+ priority ENUM('Low','Medium','High','Critical') NOT NULL DEFAULT 'Medium',
+ status ENUM('Pending','In Progress','Blocked','Completed','Cancelled') NOT NULL DEFAULT 'Pending',
+ approval_status ENUM('Not Required','Pending','Approved','Rejected') NOT NULL DEFAULT 'Not Required',
+ due_date DATE NULL,
+ assigned_to INT UNSIGNED NULL,
+ created_by INT UNSIGNED NULL,
+ completed_at DATETIME NULL,
+ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+ INDEX idx_task_status_due (status,due_date),
+ INDEX idx_task_assigned (assigned_to),
+ INDEX idx_task_created_by (created_by),
+ CONSTRAINT fk_task_assigned_user FOREIGN KEY (assigned_to) REFERENCES users(id) ON DELETE SET NULL,
+ CONSTRAINT fk_task_created_user FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB;

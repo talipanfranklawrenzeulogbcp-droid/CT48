@@ -33,7 +33,7 @@ final class FeedbackService {
     }
 
     private function original(int $id): array {
-        $q = $this->pdo->prepare("SELECT * FROM admin_notifications WHERE id=? AND type='feedback' LIMIT 1");
+        $q = $this->pdo->prepare("SELECT * FROM admin_notifications WHERE id=? AND type='feedback' AND deleted_at IS NULL LIMIT 1");
         $q->execute([$id]);
         $row = $q->fetch();
         if (!$row) throw new RuntimeException('The selected feedback could not be found.');
@@ -81,7 +81,7 @@ final class FeedbackService {
     public function mine(array $user, int $limit = 30): array {
         $limit = max(1, min(100, $limit));
         $q = $this->pdo->prepare("SELECT id,message,category,rating,status,created_at FROM admin_notifications
-            WHERE type='feedback' AND sender_user_id=? ORDER BY id DESC LIMIT $limit");
+            WHERE type='feedback' AND sender_user_id=? AND deleted_at IS NULL ORDER BY id DESC LIMIT $limit");
         $q->execute([(int)($user['id'] ?? 0)]);
         return $this->attachReplies($q->fetchAll());
     }
@@ -90,7 +90,7 @@ final class FeedbackService {
     public function inbox(array $admin, string $status = '', int $beforeId = 0, int $limit = 20): array {
         if (($admin['role'] ?? '') !== 'Administrator') throw new RuntimeException('Administrator access required.');
         $limit = max(1, min(50, $limit));
-        $sql = "SELECT id,message,category,rating,status,sender_name,sender_role,sender_user_id,is_read,created_at FROM admin_notifications WHERE type='feedback'";
+        $sql = "SELECT id,message,category,rating,status,sender_name,sender_role,sender_user_id,is_read,created_at FROM admin_notifications WHERE type='feedback' AND deleted_at IS NULL";
         $p = [];
         if (in_array($status, ['open','replied','resolved'], true)) { $sql .= " AND status=?"; $p[] = $status; }
         if ($beforeId > 0) { $sql .= " AND id<?"; $p[] = $beforeId; }
@@ -106,7 +106,7 @@ final class FeedbackService {
         $ids = array_map(fn($r) => (int)$r['id'], $rows);
         $in = implode(',', array_fill(0, count($ids), '?'));
         $q = $this->pdo->prepare("SELECT id,parent_id,message,sender_name,sender_role,created_at FROM admin_notifications
-            WHERE type='feedback_reply' AND parent_id IN ($in) AND title='Reply to Your Feedback' ORDER BY id ASC");
+            WHERE type='feedback_reply' AND parent_id IN ($in) AND title='Reply to Your Feedback' AND deleted_at IS NULL ORDER BY id ASC");
         $q->execute($ids);
         $by = [];
         foreach ($q->fetchAll() as $r) $by[(int)$r['parent_id']][] = $r;

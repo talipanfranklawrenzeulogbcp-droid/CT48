@@ -45,7 +45,7 @@ RUN { \
         echo 'log_errors=On'; \
         echo 'error_log=/proc/self/fd/2'; \
         echo 'memory_limit=256M'; \
-        echo 'upload_max_filesize=8M'; \
+        echo 'upload_max_filesize=12M'; \
         echo 'post_max_size=50M'; \
         echo 'max_file_uploads=20'; \
         echo 'max_input_time=120'; \

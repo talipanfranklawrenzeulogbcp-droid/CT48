@@ -32,7 +32,7 @@ function gsms_server_pdo(): PDO {
  * migration statements, so it is safe to use on a brand-new local database
  * and on an existing installation.
  */
-function gsms_bootstrap_schema(PDO $pdo): void {
+function gsms_bootstrap_schema(PDO $pdo, bool $includeSeedData = true): void {
     $schema = dirname(__DIR__).'/database/database.sql';
     if (!is_file($schema) || !is_readable($schema)) {
         throw new RuntimeException('Database schema file is missing: database/database.sql');
@@ -51,6 +51,9 @@ function gsms_bootstrap_schema(PDO $pdo): void {
     foreach (preg_split('/;\s*(?:\r?\n|$)/', (string)$sql) as $statement) {
         $statement = trim($statement);
         if ($statement === '') continue;
+        // Never inject sample/demo rows into a database that already has tables.
+        // This also makes recovery from a partially completed first boot safer.
+        if (!$includeSeedData && preg_match('/^INSERT(?:\s+IGNORE)?\s+/i', $statement)) continue;
 
         try {
             $pdo->exec($statement);
@@ -128,15 +131,31 @@ function gsms_prepare_database(): void {
         );
     }
 
-    // Bootstrap only when the schema has not been installed yet. This prevents
-    // demo/seed records in database.sql from being duplicated on every request.
-    $hasUsersTable = (bool)$pdo->query(
+    // Detect an incomplete schema, not just a missing users table. A previous
+    // first boot can fail after creating users; checking only that table would
+    // then leave the application permanently missing later tables. Existing
+    // databases are repaired additively without replaying demo/sample inserts.
+    $requiredTables = [
+        'users', 'admin_notifications', 'archive_items', 'audit_logs', 'login_history',
+        'otp_requests', 'safety_incidents', 'health_records', 'compliance_obligations',
+        'compliance_audits', 'security_events', 'assets', 'asset_issuances',
+        'maintenance_records', 'employee_document_records', 'health_safety_files',
+        'data_storage', 'workflow_tasks',
+    ];
+    $placeholders = implode(',', array_fill(0, count($requiredTables), '?'));
+    $tableCheck = $pdo->prepare(
         "SELECT COUNT(*) FROM information_schema.tables
-         WHERE table_schema = DATABASE() AND table_name = 'users'"
-    )->fetchColumn();
-
-    if (!$hasUsersTable) {
-        gsms_bootstrap_schema($pdo);
+         WHERE table_schema = DATABASE() AND table_name IN ($placeholders)"
+    );
+    $tableCheck->execute($requiredTables);
+    $foundRequired = (int)$tableCheck->fetchColumn();
+    if ($foundRequired < count($requiredTables)) {
+        $anyTables = (int)$pdo->query(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE()"
+        )->fetchColumn();
+        // Seed only a genuinely empty database. If any table exists, run DDL and
+        // additive migrations only, preserving all existing application data.
+        gsms_bootstrap_schema($pdo, $anyTables === 0);
     }
 
     $prepared = true;
@@ -174,9 +193,54 @@ function db(): PDO {
             if ((int)$check->fetchColumn()===0) $pdo->exec("ALTER TABLE `{$table}` ADD INDEX `{$index}` ({$columns})");
         } catch (Throwable $e) { error_log("CT4 migration index {$table}.{$index} failed: ".$e->getMessage()); }
     };
+    // Repair legacy login-history tables additively before the login form uses them.
+    // A missing timestamp is left NULL for historic rows; new rows use NOW() in the helper.
+    $addColumn('login_history','user_id','INT UNSIGNED NULL');
+    $addColumn('login_history','email',"VARCHAR(190) NOT NULL DEFAULT ''");
+    $addColumn('login_history','status',"VARCHAR(40) NOT NULL DEFAULT 'Failed'");
+    $addColumn('login_history','ip_address','VARCHAR(45) NULL');
+    $addColumn('login_history','user_agent','VARCHAR(500) NULL');
+    $addColumn('login_history','login_at','DATETIME NULL DEFAULT NULL');
+
+    // Older installations used ENUM('Success','Failed') and rejected the 'OTP Pending'
+    // status, which could make an otherwise successful password+OTP login appear to fail.
+    // VARCHAR preserves all existing status values while supporting all three statuses.
+    try {
+        $statusColumn=$pdo->prepare("SELECT DATA_TYPE, CHARACTER_MAXIMUM_LENGTH FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='login_history' AND COLUMN_NAME='status'");
+        $statusColumn->execute();
+        $statusMeta=$statusColumn->fetch(PDO::FETCH_ASSOC);
+        if ($statusMeta && (strtolower((string)$statusMeta['DATA_TYPE']) !== 'varchar' || (int)$statusMeta['CHARACTER_MAXIMUM_LENGTH'] < 40)) {
+            $pdo->exec("ALTER TABLE login_history MODIFY COLUMN status VARCHAR(40) NOT NULL");
+        }
+    } catch (Throwable $e) { error_log('CT4 login_history.status compatibility migration failed: '.$e->getMessage()); }
     $addColumn('health_safety_files','requester_user_id','INT UNSIGNED NULL AFTER employee_name');
     $addColumn('health_safety_files','storage_file_id','BIGINT UNSIGNED NULL AFTER file_type');
     $addColumn('health_safety_files','released_at','DATETIME NULL AFTER notes');
+    // Cross-version migrations for columns referenced by the current forms/services.
+    $addColumn('assets','quantity','INT UNSIGNED NOT NULL DEFAULT 1 AFTER serial_number');
+    $addColumn('health_records','employee_id','VARCHAR(80) NULL');
+    $addColumn('health_records','blood_pressure','VARCHAR(40) NULL');
+    $addColumn('health_records','temperature','DECIMAL(4,1) NULL');
+    $addColumn('health_records','allergies','TEXT NULL');
+    $addColumn('health_records','medical_conditions','TEXT NULL');
+    $addColumn('health_records','medications','TEXT NULL');
+    $addColumn('health_records','lab_results','TEXT NULL');
+    $addColumn('health_records','restrictions','TEXT NULL');
+    $addColumn('health_records','next_review_date','DATE NULL');
+    $addColumn('health_records','clinician_name','VARCHAR(120) NULL');
+    $addColumn('health_records','confidential_notes','TEXT NULL');
+    $addColumn('health_records','height_cm','DECIMAL(5,1) NULL');
+    $addColumn('health_records','weight_kg','DECIMAL(5,1) NULL');
+    $addColumn('health_records','bmi','DECIMAL(5,1) NULL');
+    // Keep compatibility with the legacy JSON notification/feedback endpoint while
+    // the newer interface uses reply_to_id/deleted_at and feedback_cases.
+    $addColumn('admin_notifications','category','VARCHAR(40) NULL AFTER message');
+    $addColumn('admin_notifications','rating','TINYINT UNSIGNED NULL AFTER category');
+    $addColumn('admin_notifications','parent_id','BIGINT UNSIGNED NULL AFTER rating');
+    $addColumn('admin_notifications','status',"VARCHAR(20) NOT NULL DEFAULT 'open' AFTER parent_id");
+    $addColumn('admin_notifications','is_dismissed','TINYINT(1) NOT NULL DEFAULT 0 AFTER is_read');
+    $addIndex('admin_notifications','idx_notification_parent','parent_id');
+    $addIndex('admin_notifications','idx_notification_inbox','user_id,is_dismissed,is_read,created_at');
     $addColumn('compliance_obligations','report_name','VARCHAR(120) NULL AFTER title');
     $addColumn('compliance_obligations','report_role','VARCHAR(120) NULL AFTER report_name');
     $addColumn('compliance_obligations','contact_no','VARCHAR(60) NULL AFTER report_role');
@@ -213,6 +277,7 @@ function db(): PDO {
     } catch (Throwable $e) {
         error_log('CT4 workflow task migration failed: '.$e->getMessage());
     }
+    $addColumn('workflow_tasks','approval_status',"ENUM('Not Required','Pending','Approved','Rejected') NOT NULL DEFAULT 'Not Required' AFTER status");
 
     // Do not rewrite user roles or seed accounts automatically. Account roles and
     // credentials are application data and must be managed explicitly by an admin.
@@ -266,45 +331,7 @@ function db(): PDO {
             FROM admin_notifications WHERE type='feedback' AND deleted_at IS NULL");
     } catch (Throwable $e) { error_log('CT4 feedback migration failed: '.$e->getMessage()); }
 
-    // One-time cleanup requested for the specific Network Printer record. The
-    // migration marker prevents later re-registration of a new item from being
-    // deleted on every request. Only this exact asset and its dependent
-    // issuance/maintenance records are affected; unrelated database content is
-    // left untouched. The asset UI also excludes it if this migration cannot run.
-    try {
-        $pdo->exec("CREATE TABLE IF NOT EXISTS app_migrations (
-            migration_key VARCHAR(120) NOT NULL PRIMARY KEY,
-            applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-        ) ENGINE=InnoDB");
-        $migrationKey = '20261010_remove_network_printer_sn_gsms_0003';
-        $migrationCheck = $pdo->prepare('SELECT migration_key FROM app_migrations WHERE migration_key = ?');
-        $migrationCheck->execute([$migrationKey]);
-        if (!$migrationCheck->fetchColumn()) {
-            $pdo->beginTransaction();
-            $targetStmt = $pdo->prepare("SELECT id FROM assets
-                WHERE asset_tag = ? AND name = ? AND serial_number = ? FOR UPDATE");
-            $targetStmt->execute(['AST-0003', 'Network Printer', 'SN-GSMS-0003']);
-            $targetIds = array_map('intval', $targetStmt->fetchAll(PDO::FETCH_COLUMN));
-            if ($targetIds) {
-                $deleteIssuances = $pdo->prepare('DELETE FROM asset_issuances WHERE asset_id = ?');
-                $deleteAsset = $pdo->prepare('DELETE FROM assets WHERE id = ?');
-                foreach ($targetIds as $targetId) {
-                    $deleteIssuances->execute([$targetId]);
-                    // maintenance_records use ON DELETE CASCADE; issuance rows
-                    // use RESTRICT, so only that asset's dependent rows are removed first.
-                    $deleteAsset->execute([$targetId]);
-                }
-            }
-            $markMigration = $pdo->prepare('INSERT INTO app_migrations (migration_key) VALUES (?)');
-            $markMigration->execute([$migrationKey]);
-            $pdo->commit();
-        }
-    } catch (Throwable $e) {
-        if ($pdo->inTransaction()) {
-            $pdo->rollBack();
-        }
-        error_log('CT4 asset cleanup migration failed: ' . $e->getMessage());
-    }
+    // Do not automatically delete or hide inventory records during database initialization.
 
     return $pdo;
 }

@@ -9,7 +9,7 @@ if (!$id) {
 }
 
 try {
-    $stmt = db()->prepare('SELECT asset_tag FROM assets WHERE id = ? LIMIT 1');
+    $stmt = db()->prepare("SELECT asset_tag FROM assets WHERE id = ? AND NOT (COALESCE(asset_tag, '') = 'AST-0003' OR COALESCE(serial_number, '') = 'SN-GSMS-0003' OR LOWER(TRIM(COALESCE(name, ''))) = 'network printer') LIMIT 1");
     $stmt->execute([(int)$id]);
     $assetTag = $stmt->fetchColumn();
     if (!is_string($assetTag) || $assetTag === '') {

@@ -3,6 +3,7 @@ final class HealthSafetyService {
     private const MODULE='Health, Safety & Welfare';
     public function __construct(private PDO $pdo, private AuditService $audit, private ?NotificationService $notes=null) {
         $this->ensureIncidentColumns();
+        $this->ensureHealthRecordColumns();
     }
 
     /**
@@ -38,6 +39,48 @@ final class HealthSafetyService {
         } catch (Throwable $e) {
             // Do not prevent read-only use if the DB account cannot perform migrations.
             // A subsequent incident save will report a useful database error if columns are missing.
+        }
+    }
+
+    /** Additive compatibility migration so older deployments can render and save the current health table. */
+    private function ensureHealthRecordColumns(): void {
+        $columns = [
+            'employee_name' => 'VARCHAR(120) NULL',
+            'checkup_date' => 'DATE NULL',
+            'record_type' => 'VARCHAR(120) NULL',
+            'fitness_status' => "VARCHAR(40) NOT NULL DEFAULT 'Pending'",
+            'notes' => 'TEXT NULL',
+            'employee_id' => 'VARCHAR(80) NULL',
+            'blood_pressure' => 'VARCHAR(40) NULL',
+            'temperature' => 'DECIMAL(4,1) NULL',
+            'allergies' => 'TEXT NULL',
+            'medical_conditions' => 'TEXT NULL',
+            'medications' => 'TEXT NULL',
+            'lab_results' => 'TEXT NULL',
+            'restrictions' => 'TEXT NULL',
+            'next_review_date' => 'DATE NULL',
+            'clinician_name' => 'VARCHAR(120) NULL',
+            'confidential_notes' => 'TEXT NULL',
+            'height_cm' => 'DECIMAL(5,1) NULL',
+            'weight_kg' => 'DECIMAL(5,1) NULL',
+            'bmi' => 'DECIMAL(5,1) NULL'
+        ];
+        try {
+            $existing=[];
+            foreach ($this->pdo->query('SHOW COLUMNS FROM health_records')->fetchAll(PDO::FETCH_ASSOC) as $col) {
+                $existing[$col['Field']]=true;
+            }
+        } catch (Throwable $e) {
+            error_log('CT4 health_records schema inspection failed: '.$e->getMessage());
+            return;
+        }
+        foreach ($columns as $name=>$definition) {
+            if (isset($existing[$name])) continue;
+            try {
+                $this->pdo->exec("ALTER TABLE health_records ADD COLUMN `$name` $definition");
+            } catch (Throwable $e) {
+                error_log("CT4 health_records migration {$name} failed: ".$e->getMessage());
+            }
         }
     }
 
@@ -276,10 +319,38 @@ return ['incidents'=>$i,'open_incidents'=>$o,'health_records'=>$h];
             if (!$user || strtolower(trim((string)($user['email']??''))) !== 'records.entry@greatsolomonmpservices.com') {
                 throw new RuntimeException('Only the authorized Records Entry account can add employee health records.');
             }
-            $employee=trim((string)($data['employee_name']??'')); if($employee===''||empty($data['checkup_date'])) throw new RuntimeException('Employee and checkup date are required.');
-            $fitness=(string)($data['fitness_status']??'Pending'); if(!in_array($fitness,['Fit','Fit with Restrictions','Unfit','Pending'],true)) throw new RuntimeException('Invalid fitness status.');
-            $s=$this->pdo->prepare('INSERT INTO health_records(employee_name,checkup_date,record_type,fitness_status,notes) VALUES(?,?,?,?,?)');
-            $s->execute([$employee,$data['checkup_date'],trim((string)($data['record_type']??'')),$fitness,trim((string)($data['notes']??''))]);
+            $employee=trim((string)($data['employee_name']??''));
+            $date=trim((string)($data['checkup_date']??''));
+            if($employee==='' || mb_strlen($employee)>120) throw new RuntimeException('Enter a valid employee name.');
+            if(!preg_match('/^\d{4}-\d{2}-\d{2}$/',$date) || !checkdate((int)substr($date,5,2),(int)substr($date,8,2),(int)substr($date,0,4))) {
+                throw new RuntimeException('Enter a valid checkup date.');
+            }
+            $fitness=(string)($data['fitness_status']??'Pending');
+            if(!in_array($fitness,['Fit','Fit with Restrictions','Unfit','Pending'],true)) throw new RuntimeException('Invalid fitness status.');
+            $recordType=trim((string)($data['record_type']??''));
+            if(mb_strlen($recordType)>120) throw new RuntimeException('Record type is too long.');
+            $nextReview=trim((string)($data['next_review_date']??''));
+            if($nextReview!=='' && (!preg_match('/^\d{4}-\d{2}-\d{2}$/',$nextReview) || !checkdate((int)substr($nextReview,5,2),(int)substr($nextReview,8,2),(int)substr($nextReview,0,4)))) {
+                throw new RuntimeException('Enter a valid next review date.');
+            }
+            $heightRaw=trim((string)($data['height_cm']??''));
+            $weightRaw=trim((string)($data['weight_kg']??''));
+            $height=$heightRaw!=='' && is_numeric($heightRaw) ? (float)$heightRaw : null;
+            $weight=$weightRaw!=='' && is_numeric($weightRaw) ? (float)$weightRaw : null;
+            if($height!==null && ($height<50 || $height>250)) throw new RuntimeException('Height must be between 50 and 250 cm.');
+            if($weight!==null && ($weight<2 || $weight>400)) throw new RuntimeException('Weight must be between 2 and 400 kg.');
+            $bmi=($height!==null && $weight!==null && $height>0) ? round($weight / (($height/100) ** 2), 1) : null;
+            $employeeId=trim((string)($data['employee_id']??''));
+            if(mb_strlen($employeeId)>80) throw new RuntimeException('Employee ID is too long.');
+            $s=$this->pdo->prepare('INSERT INTO health_records (employee_name,checkup_date,record_type,fitness_status,notes,employee_id,allergies,medical_conditions,medications,lab_results,restrictions,next_review_date,clinician_name,confidential_notes,height_cm,weight_kg,bmi) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
+            $s->execute([
+                $employee,$date,$recordType,$fitness,trim((string)($data['notes']??'')),$employeeId,
+                trim((string)($data['allergies']??'')),trim((string)($data['medical_conditions']??'')),
+                trim((string)($data['medications']??'')),trim((string)($data['lab_results']??'')),
+                trim((string)($data['restrictions']??'')),$nextReview!==''?$nextReview:null,
+                trim((string)($data['clinician_name']??'')),trim((string)($data['confidential_notes']??'')),
+                $height,$weight,$bmi
+            ]);
             $this->audit->record($user,self::MODULE,'Create Health Record',$employee); return 'Health record saved.';
         }
         throw new RuntimeException('Unsupported Health & Safety action.');

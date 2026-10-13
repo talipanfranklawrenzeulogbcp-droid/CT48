@@ -55,47 +55,69 @@ function smtp_connect_and_auth() {
     if ($connectHost === '' || preg_match('/[\r\n\/]/', $connectHost)) {
         throw new RuntimeException('Invalid SMTP connection host configuration.');
     }
+
+    // The TLS certificate must match Gmail's public hostname even when a hosting
+    // provider requires MAIL_CONNECT_HOST to be an IP address or alternate host.
     $context = stream_context_create([
         'ssl' => [
             'verify_peer' => true,
             'verify_peer_name' => true,
             'peer_name' => MAIL_TLS_PEER_NAME,
-            'allow_self_signed' => false
-        ]
+            'allow_self_signed' => false,
+        ],
     ]);
 
-    $socket = @stream_socket_client(
-        'tcp://'.$connectHost.':'.MAIL_PORT,
-        $errno,
-        $errstr,
-        max(3, SMTP_CONNECT_TIMEOUT),
-        STREAM_CLIENT_CONNECT,
-        $context
-    );
-    if (!$socket) {
-        throw new RuntimeException('Unable to connect to Gmail SMTP ('.$errno.'): '.$errstr.'. Check DNS and outbound TCP port 587 on the PHP server.');
-    }
-    stream_set_timeout($socket, 15);
+    // Try the configured SMTP transport first. Gmail commonly supports STARTTLS
+    // on 587 and implicit TLS on 465; some shared hosts block one of those ports.
+    $configuredPort = MAIL_PORT > 0 ? MAIL_PORT : 587;
+    $attempts = [];
+    $lastError = null;
+    foreach ([[$configuredPort, $configuredPort === 465], [465, true], [587, false]] as [$port, $implicitTls]) {
+        $port = (int)$port;
+        $key = $port . ':' . ($implicitTls ? 'implicit-tls' : 'starttls');
+        if (isset($attempts[$key])) continue;
+        $attempts[$key] = true;
+        $socket = false;
 
-    try {
-        smtp_expect($socket, [220]);
-        smtp_cmd($socket, 'EHLO greatsolomon.local', [250]);
-        smtp_cmd($socket, 'STARTTLS', [220]);
+        try {
+            $scheme = $implicitTls ? 'ssl' : 'tcp';
+            $socket = @stream_socket_client(
+                $scheme . '://' . $connectHost . ':' . $port,
+                $errno,
+                $errstr,
+                max(3, (int)SMTP_CONNECT_TIMEOUT),
+                STREAM_CLIENT_CONNECT,
+                $context
+            );
+            if (!$socket) {
+                throw new RuntimeException('Unable to connect to Gmail SMTP on port ' . $port . ' (' . (int)$errno . '): ' . (string)$errstr);
+            }
+            stream_set_timeout($socket, 15);
 
-        $crypto = @stream_socket_enable_crypto($socket, true, STREAM_CRYPTO_METHOD_TLS_CLIENT);
-        if ($crypto !== true) {
-            throw new RuntimeException('TLS negotiation with Gmail SMTP failed. Check PHP OpenSSL and server certificates.');
+            smtp_expect($socket, [220]);
+            smtp_cmd($socket, 'EHLO greatsolomon.local', [250]);
+
+            if (!$implicitTls) {
+                smtp_cmd($socket, 'STARTTLS', [220]);
+                $crypto = @stream_socket_enable_crypto($socket, true, STREAM_CRYPTO_METHOD_TLS_CLIENT);
+                if ($crypto !== true) {
+                    throw new RuntimeException('TLS negotiation with Gmail SMTP failed on port ' . $port . '. Check PHP OpenSSL and server certificates.');
+                }
+                smtp_cmd($socket, 'EHLO greatsolomon.local', [250]);
+            }
+
+            smtp_cmd($socket, 'AUTH LOGIN', [334]);
+            smtp_cmd($socket, base64_encode(trim(MAIL_USERNAME)), [334]);
+            smtp_cmd($socket, base64_encode(str_replace(' ', '', trim(MAIL_PASSWORD))), [235]);
+            return $socket;
+        } catch (Throwable $e) {
+            $lastError = $e;
+            if (is_resource($socket)) fclose($socket);
+            usleep(250000);
         }
-
-        smtp_cmd($socket, 'EHLO greatsolomon.local', [250]);
-        smtp_cmd($socket, 'AUTH LOGIN', [334]);
-        smtp_cmd($socket, base64_encode(trim(MAIL_USERNAME)), [334]);
-        smtp_cmd($socket, base64_encode(str_replace(' ', '', trim(MAIL_PASSWORD))), [235]);
-        return $socket;
-    } catch (Throwable $e) {
-        fclose($socket);
-        throw $e;
     }
+
+    throw new RuntimeException('Gmail SMTP connection/authentication failed on supported transports. Check SMTP credentials, DNS, and outbound ports 465/587. ' . ($lastError?->getMessage() ?? 'Unknown SMTP error'));
 }
 
 function smtp_send_message(string $recipient, string $subject, string $htmlBody): void {

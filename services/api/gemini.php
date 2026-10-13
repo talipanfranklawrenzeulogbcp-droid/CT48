@@ -85,7 +85,14 @@ function ai_db_context(): string {
 
     foreach ($tables as $table=>$label) {
         try {
-            $count = (int)$pdo->query("SELECT COUNT(*) FROM `$table`")->fetchColumn();
+            if ($table === 'assets') {
+                $countSql = "SELECT COUNT(*) FROM assets a WHERE NOT (COALESCE(a.asset_tag, '') = 'AST-0003' OR COALESCE(a.serial_number, '') = 'SN-GSMS-0003' OR LOWER(TRIM(COALESCE(a.name, ''))) = 'network printer')";
+            } elseif ($table === 'asset_issuances') {
+                $countSql = "SELECT COUNT(*) FROM asset_issuances i INNER JOIN assets a ON a.id=i.asset_id WHERE NOT (COALESCE(a.asset_tag, '') = 'AST-0003' OR COALESCE(a.serial_number, '') = 'SN-GSMS-0003' OR LOWER(TRIM(COALESCE(a.name, ''))) = 'network printer')";
+            } else {
+                $countSql = "SELECT COUNT(*) FROM `$table`";
+            }
+            $count = (int)$pdo->query($countSql)->fetchColumn();
             $parts[] = "{$label}: {$count} records.";
         } catch (Throwable $e) {}
     }

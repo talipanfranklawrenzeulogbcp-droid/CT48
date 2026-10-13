@@ -5,6 +5,21 @@ require_login();
 $storage=service('storage');
 $action=(string)($_POST['action'] ?? $_GET['action'] ?? 'list');
 
+// All state-changing requests require the session CSRF token.
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array($action, ['upload', 'delete'], true) && !csrf_valid($_POST['csrf_token'] ?? null)) {
+    http_response_code(419);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode(['ok'=>false,'error'=>'Your session token expired. Refresh the page and try again.']);
+    exit;
+}
+
+$safeFileName = static function(string $name): string {
+    $name = basename(str_replace('\\', '/', $name));
+    $name = preg_replace('/[\x00-\x1F\x7F]+/', '', $name) ?? '';
+    $name = trim($name, ". \t");
+    return $name !== '' ? $name : 'uploaded-file';
+};
+
 if($action==='list'){
     header('Content-Type: application/json; charset=utf-8');
     echo json_encode(['ok'=>true,'items'=>$storage->items(100)],JSON_UNESCAPED_SLASHES);
@@ -20,7 +35,7 @@ if($action==='download_all'){
     if($zip->open($tmp,ZipArchive::CREATE|ZipArchive::OVERWRITE)!==true){ http_response_code(500); exit('Unable to create download package.'); }
     $used=[];
     foreach($files as $file){
-        $name=(string)$file['file_name'];
+        $name=$safeFileName((string)$file['file_name']);
         $base=$name; $i=1;
         while(isset($used[$name])){ $name=pathinfo($base,PATHINFO_FILENAME).'_'.$i.(pathinfo($base,PATHINFO_EXTENSION)?'.'.pathinfo($base,PATHINFO_EXTENSION):''); $i++; }
         $used[$name]=true;
@@ -38,13 +53,33 @@ if($action==='view' || $action==='download'){
     $id=(int)($_GET['id']??0);
     $file=$storage->file($id);
     if(!$file){ http_response_code(404); exit('File not found.'); }
-    $name=$file['file_name'];
-    $safeName=preg_replace('/[\r\n"\'\\\\]+/', '_', (string)$name);
-    header('Content-Type: '.($file['file_type']?:'application/octet-stream'));
-    header('Content-Length: '.strlen((string)$file['file_data']));
+    $name=$safeFileName((string)$file['file_name']);
+    $data=(string)$file['file_data'];
+    $extension=strtolower((string)pathinfo($name, PATHINFO_EXTENSION));
+    $detectedMime='application/octet-stream';
+    if (class_exists('finfo')) {
+        try { $finfo=new finfo(FILEINFO_MIME_TYPE); $detectedMime=(string)($finfo->buffer($data) ?: 'application/octet-stream'); }
+        catch (Throwable $e) { $detectedMime='application/octet-stream'; }
+    } elseif (function_exists('mime_content_type')) {
+        $detectedMime=(string)($file['file_type'] ?: 'application/octet-stream');
+    }
+    $safeImage = in_array($detectedMime, ['image/jpeg','image/png','image/gif','image/webp'], true)
+        && in_array($extension, ['jpg','jpeg','png','gif','webp'], true);
+    $safePdf = $detectedMime === 'application/pdf' && $extension === 'pdf';
+    $safeText = in_array($detectedMime, ['text/plain','text/csv'], true)
+        && in_array($extension, ['txt','csv','log'], true);
+    $allowInline = $action === 'view' && ($safeImage || $safePdf || $safeText);
+    $mime = $allowInline ? $detectedMime : 'application/octet-stream';
+    $headerName = preg_replace('/[^A-Za-z0-9._ -]/', '_', $name) ?: 'download';
+    header('Content-Type: '.$mime);
+    header('Content-Length: '.strlen($data));
     header('X-Content-Type-Options: nosniff');
-    header('Content-Disposition: '.($action==='download'?'attachment':'inline').'; filename="'.$safeName.'"');
-    echo $file['file_data'];
+    header('Cache-Control: private, no-store, max-age=0');
+    if ($allowInline) {
+        header("Content-Security-Policy: default-src 'none'; sandbox; frame-ancestors 'self'");
+    }
+    header('Content-Disposition: '.($allowInline?'inline':'attachment').'; filename="'.$headerName.'"');
+    echo $data;
     exit;
 }
 
@@ -105,8 +140,10 @@ if($_SERVER['REQUEST_METHOD']==='POST' && $action==='upload'){
         $tmp=$_FILES['data_file']['tmp_name'];
         $data=file_get_contents($tmp);
         if($data===false) throw new RuntimeException('Unable to read the selected file.');
-        $mime=function_exists('mime_content_type')?(string)mime_content_type($tmp):(string)($_FILES['data_file']['type']??'application/octet-stream');
-        $fileName=(string)$_FILES['data_file']['name'];
+        $mime='application/octet-stream';
+        if (class_exists('finfo')) { try { $mime=(string)((new finfo(FILEINFO_MIME_TYPE))->file($tmp) ?: 'application/octet-stream'); } catch (Throwable $e) {} }
+        elseif (function_exists('mime_content_type')) { $mime=(string)mime_content_type($tmp); }
+        $fileName=$safeFileName((string)$_FILES['data_file']['name']);
         $sourceBranch=trim((string)($_POST['source_branch']??''));
         if($sourceBranch === '') $sourceBranch = 'Branch Transfer';
         $userId = (int)($u['id'] ?? 0);

@@ -6,12 +6,25 @@ function csrf_token(): string {
     if (empty($_SESSION['csrf_token'])) $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
     return (string)$_SESSION['csrf_token'];
 }
-function csrf_valid(?string $token): bool {
+function csrf_valid(?string $token = null): bool {
+    if ($token === null) $token = isset($_POST['csrf_token']) ? (string)$_POST['csrf_token'] : null;
     return is_string($token) && isset($_SESSION['csrf_token']) && hash_equals((string)$_SESSION['csrf_token'], $token);
 }
 function flash(string $type, string $message): void { $_SESSION['flash']=['type'=>$type,'message'=>$message]; }
 function show_flash(): void { if (!empty($_SESSION['flash'])) { $f=$_SESSION['flash']; unset($_SESSION['flash']); echo '<div class="notice '.e($f['type']).'">'.e($f['message']).'</div>'; } }
 function audit(string $module,string $action,string $details=''): void { try { $u=current_user(); $stmt=db()->prepare('INSERT INTO audit_logs(user_id,module,action,details) VALUES(?,?,?,?)'); $stmt->execute([$u['id']??null,$module,$action,$details]); } catch(Throwable $e) {} }
+/**
+ * Record authentication history without allowing an optional audit write to block a valid login.
+ * This also keeps older deployments with a narrower login_history schema usable during migration.
+ */
+function safe_login_history(?int $userId, string $email, string $status, ?string $ipAddress = null, string $userAgent = ''): void {
+    try {
+        $stmt = db()->prepare('INSERT INTO login_history(user_id,email,status,ip_address,user_agent,login_at) VALUES(?,?,?,?,?,NOW())');
+        $stmt->execute([$userId, $email, $status, $ipAddress, substr($userAgent, 0, 500)]);
+    } catch (Throwable $e) {
+        error_log('CT4 login history write failed ['.get_class($e).']: '.$e->getMessage());
+    }
+}
 function base_url(): string { return app_base_path(); }
 function url(string $path): string { return app_url($path); }
 function redirect(string $path): never { header('Location: '.url($path)); exit; }

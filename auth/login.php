@@ -44,17 +44,14 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
                 db()->prepare('UPDATE otp_requests SET attempts=attempts+1 WHERE id=?')->execute([(int)$row['id']]);
                 $error='Incorrect verification code.';
             } else {
-                login_user($pending);
-                db()->prepare('DELETE FROM otp_requests WHERE user_id=?')->execute([(int)$pending['id']]);
+                // A valid OTP completes authentication. Cleanup and history writes are best-effort
+                // so a legacy schema/audit-table issue cannot strand a verified user on the login page.
+                try { db()->prepare('DELETE FROM otp_requests WHERE user_id=?')->execute([(int)$pending['id']]); }
+                catch (Throwable $cleanupError) { error_log('CT4 OTP cleanup failed: '.$cleanupError->getMessage()); }
                 unset($_SESSION['pending_otp_user'],$_SESSION['pending_otp_created'],$_SESSION['local_otp_code']);
                 $localOtpCode=null;
-
-                $history=db()->prepare('INSERT INTO login_history(user_id,email,status,ip_address,user_agent) VALUES(?,?,?,?,?)');
-                $history->execute([
-                    (int)$pending['id'],$pending['email'],'Success',
-                    $_SERVER['REMOTE_ADDR']??'Unknown',
-                    substr($_SERVER['HTTP_USER_AGENT']??'',0,500)
-                ]);
+                login_user($pending);
+                safe_login_history((int)$pending['id'],(string)$pending['email'],'Success',$_SERVER['REMOTE_ADDR']??'Unknown',(string)($_SERVER['HTTP_USER_AGENT']??''));
                 audit('System Administration & Security','Two-Step Login','Successful password and OTP verification');
                 redirect(is_records_entry_account(current_user()) ? '/records_entry_dashboard.php' : '/dashboard.php');
             }
@@ -87,9 +84,17 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
                 $error='Invalid email or password.';
             } else {
                 $ip=(string)($_SERVER['REMOTE_ADDR']??'Unknown');
-                $rate=db()->prepare("SELECT COUNT(*) FROM login_history WHERE email=? AND ip_address=? AND status='Failed' AND login_at >= DATE_SUB(NOW(), INTERVAL 15 MINUTE)");
-                $rate->execute([$email,$ip]);
-                if ((int)$rate->fetchColumn() >= 8) {
+                $rateLimited=false;
+                try {
+                    $rate=db()->prepare("SELECT COUNT(*) FROM login_history WHERE email=? AND ip_address=? AND status='Failed' AND login_at >= DATE_SUB(NOW(), INTERVAL 15 MINUTE)");
+                    $rate->execute([$email,$ip]);
+                    $rateLimited=(int)$rate->fetchColumn() >= 8;
+                } catch (Throwable $rateError) {
+                    // The schema migration below repairs legacy history tables; a logging table error
+                    // should not lock every user out of the application.
+                    error_log('CT4 login rate-limit lookup failed ['.get_class($rateError).']: '.$rateError->getMessage());
+                }
+                if ($rateLimited) {
                     $error='Too many failed attempts. Please wait 15 minutes before trying again.';
                 } else {
             $stmt=db()->prepare('SELECT id,name,email,role,password_hash FROM users WHERE email=? AND active=1 LIMIT 1');
@@ -100,8 +105,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
                 // This dedicated entry role is exempt from OTP; all other roles retain normal OTP.
                 if (strtolower(trim((string)($u['email'] ?? ''))) === 'records.entry@greatsolomonmpservices.com') {
                     login_user($u);
-                    $history=db()->prepare('INSERT INTO login_history(user_id,email,status,ip_address,user_agent) VALUES(?,?,?,?,?)');
-                    $history->execute([(int)$u['id'],$u['email'],'Success',$_SERVER['REMOTE_ADDR']??'Unknown',substr($_SERVER['HTTP_USER_AGENT']??'',0,500)]);
+                    safe_login_history((int)$u['id'],(string)$u['email'],'Success',$_SERVER['REMOTE_ADDR']??'Unknown',(string)($_SERVER['HTTP_USER_AGENT']??''));
                     audit('Records Entry','Password Login','Successful password-only login for restricted entry account');
                     redirect('/records_entry_dashboard.php');
                 }
@@ -114,8 +118,14 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
                 db()->prepare('INSERT INTO otp_requests(user_id,otp_hash,expires_at,attempts) VALUES(?,?,?,0)')
                     ->execute([(int)$u['id'],$otpHash,$expires]);
 
+                $otpMailError = null;
                 try {
                     send_otp_email($u['email'],$u['name'],$otp);
+                } catch(Throwable $mailError) {
+                    $otpMailError = $mailError;
+                }
+
+                if ($otpMailError === null) {
                     unset($_SESSION['local_otp_code']);
                     $_SESSION['pending_otp_user']=[
                         'id'=>(int)$u['id'],'name'=>$u['name'],
@@ -124,44 +134,28 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
                     $_SESSION['pending_otp_created']=time();
                     $pending=$_SESSION['pending_otp_user'];
                     $success='Verification code sent. Enter the 6-digit OTP below to continue to the dashboard.';
-
-                    $history=db()->prepare('INSERT INTO login_history(user_id,email,status,ip_address,user_agent) VALUES(?,?,?,?,?)');
-                    $history->execute([
-                        (int)$u['id'],$email,'OTP Pending',
-                        $_SERVER['REMOTE_ADDR']??'Unknown',
-                        substr($_SERVER['HTTP_USER_AGENT']??'',0,500)
-                    ]);
-                } catch(Throwable $mailError) {
-                    if (gsms_local_otp_fallback_enabled()) {
-                        $_SESSION['local_otp_code']=$otp;
-                        $_SESSION['pending_otp_user']=[
-                            'id'=>(int)$u['id'],'name'=>$u['name'],
-                            'email'=>$u['email'],'role'=>$u['role']
-                        ];
-                        $_SESSION['pending_otp_created']=time();
-                        $pending=$_SESSION['pending_otp_user'];
-                        $localOtpCode=$otp;
-                        $success='Gmail SMTP is unavailable on this localhost machine. For local testing, use the OTP shown below. Real Gmail delivery will resume automatically when SMTP access is available.';
-
-                        $history=db()->prepare('INSERT INTO login_history(user_id,email,status,ip_address,user_agent) VALUES(?,?,?,?,?)');
-                        $history->execute([
-                            (int)$u['id'],$email,'OTP Pending',
-                            $_SERVER['REMOTE_ADDR']??'Unknown',
-                            substr($_SERVER['HTTP_USER_AGENT']??'',0,500)
-                        ]);
-                    } else {
-                        db()->prepare('DELETE FROM otp_requests WHERE user_id=?')->execute([(int)$u['id']]);
-                        $error='We could not send the verification code. Gmail SMTP requires DNS resolution and outbound TCP 587 access on the server.';
-                    }
+                    safe_login_history((int)$u['id'],$email,'OTP Pending',$_SERVER['REMOTE_ADDR']??'Unknown',(string)($_SERVER['HTTP_USER_AGENT']??''));
+                } elseif (gsms_local_otp_fallback_enabled()) {
+                    $_SESSION['local_otp_code']=$otp;
+                    $_SESSION['pending_otp_user']=[
+                        'id'=>(int)$u['id'],'name'=>$u['name'],
+                        'email'=>$u['email'],'role'=>$u['role']
+                    ];
+                    $_SESSION['pending_otp_created']=time();
+                    $pending=$_SESSION['pending_otp_user'];
+                    $localOtpCode=$otp;
+                    $success='Gmail SMTP is unavailable on this localhost machine. For local testing, use the OTP shown below. Real Gmail delivery will resume automatically when SMTP access is available.';
+                    safe_login_history((int)$u['id'],$email,'OTP Pending',$_SERVER['REMOTE_ADDR']??'Unknown',(string)($_SERVER['HTTP_USER_AGENT']??''));
+                } else {
+                    try { db()->prepare('DELETE FROM otp_requests WHERE user_id=?')->execute([(int)$u['id']]); }
+                    catch (Throwable $cleanupError) { error_log('CT4 failed to remove unsent OTP: '.$cleanupError->getMessage()); }
+                    error_log('CT4 OTP email delivery failed ['.get_class($otpMailError).']: '.$otpMailError->getMessage());
+                    $error='We could not send the verification code. Check the server Gmail SMTP configuration and outbound mail connectivity.';
                 }
+
             } else {
                 $error='Invalid email or password.';
-                $history=db()->prepare('INSERT INTO login_history(user_id,email,status,ip_address,user_agent) VALUES(?,?,?,?,?)');
-                $history->execute([
-                    $u ? (int)$u['id'] : null,$email,'Failed',
-                    $_SERVER['REMOTE_ADDR']??'Unknown',
-                    substr($_SERVER['HTTP_USER_AGENT']??'',0,500)
-                ]);
+                safe_login_history($u ? (int)$u['id'] : null,$email,'Failed',$_SERVER['REMOTE_ADDR']??'Unknown',(string)($_SERVER['HTTP_USER_AGENT']??''));
             }
                 }
             }
@@ -176,8 +170,15 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
             $e->getFile(),
             $e->getLine()
         ));
+        $loginExceptionMessage = strtolower($e->getMessage());
         if (defined('APP_DEBUG') && APP_DEBUG) {
             $error = 'Login diagnostic: '.get_class($e).': '.$e->getMessage().' (see server error log for file and line).';
+        } elseif ($e instanceof PDOException && (str_contains($loginExceptionMessage, 'php_network_getaddresses') || str_contains($loginExceptionMessage, 'getaddrinfo') || str_contains($loginExceptionMessage, 'unknown mysql server host'))) {
+            $error = 'The database hostname cannot be resolved. Update GSMS_DB_HOST or DATABASE_URL to the active database service hostname in your hosting environment, then redeploy.';
+        } elseif ($e instanceof PDOException && (str_contains($loginExceptionMessage, 'access denied') || str_contains($loginExceptionMessage, 'authentication method'))) {
+            $error = 'The database rejected the configured credentials. Check GSMS_DB_USER, GSMS_DB_PASS, and the active database service settings.';
+        } elseif ($e instanceof PDOException && str_contains($loginExceptionMessage, 'could not find driver')) {
+            $error = 'The server is missing the PHP MySQL PDO extension. Enable pdo_mysql in the deployment image.';
         } else {
             $error='Unable to process the request. Check the database and Gmail settings.';
         }

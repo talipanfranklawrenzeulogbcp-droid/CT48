@@ -323,6 +323,7 @@ function handleDataStorageUpload(e){
   const originalHtml=btn?btn.innerHTML:'';
   if(btn){ btn.disabled=true; btn.innerHTML='<span class="material-symbols-outlined">hourglass_top</span> Uploading...'; }
   const fd=new FormData(form);
+  fd.append('csrf_token',String(window.CSRF_TOKEN||''));
   fetch(`${window.APP_BASE||''}/includes/data_storage.php?action=upload`,{
     method:'POST',
     body:fd,
@@ -354,7 +355,7 @@ function loadDataStorageList(){
       if(!window.DATA_STORAGE_HAS_FILES){
         box.innerHTML=`<div class="notification-empty"><span class="material-symbols-outlined">folder_off</span><strong>NO DATA/FILES STORED YET.</strong><p>DATA/FILES RECEIVED FROM OTHER BRANCHES WILL APPEAR HERE.</p></div>`; return;
       }
-      box.innerHTML=data.items.map(f=>`<button type="button" class="data-storage-item" onclick="showStoredFile(${Number(f.id)},${JSON.stringify(String(f.file_name))},${JSON.stringify(String(f.file_type||''))})">
+      box.innerHTML=data.items.map(f=>`<button type="button" class="data-storage-item" onclick="showStoredFile(${Number(f.id)},${escapeHtml(JSON.stringify(String(f.file_name)))},${escapeHtml(JSON.stringify(String(f.file_type||'')))})">
         <span class="data-storage-file-icon material-symbols-outlined">${String(f.file_type||'').startsWith('image/')?'image':'description'}</span>
         <span class="data-storage-file-main"><strong>${escapeHtml(f.file_name)}</strong><small>${escapeHtml(f.source_branch||'Other Branch')} · ${escapeHtml(formatBytes(f.file_size))}</small></span>
         <span class="material-symbols-outlined">chevron_right</span>
@@ -364,9 +365,10 @@ function loadDataStorageList(){
 function showStoredFile(id,name,type){
   const root=document.getElementById('modalRoot'); if(!root)return;
   const src=`${window.APP_BASE||''}/includes/data_storage.php?action=view&id=${encodeURIComponent(id)}`;
-  const isImg = String(type||'').startsWith('image/') || /\.(jpe?g|png|gif|webp|svg)$/i.test(name);
-  const isPdf = (type === 'application/pdf') || /\.pdf$/i.test(name);
-  const isTxt = String(type||'').startsWith('text/') || /\.(txt|csv|log|json|xml|html)$/i.test(name);
+  const normalizedType=String(type||'').toLowerCase();
+  const isImg = ['image/jpeg','image/png','image/gif','image/webp'].includes(normalizedType) && /\.(jpe?g|png|gif|webp)$/i.test(name);
+  const isPdf = normalizedType === 'application/pdf' && /\.pdf$/i.test(name);
+  const isTxt = ['text/plain','text/csv'].includes(normalizedType) && /\.(txt|csv|log)$/i.test(name);
   let previewContent = '';
   if (isImg) {
     previewContent = `<div style="display:flex;align-items:center;justify-content:center;height:100%;background:#f1f5f9;padding:12px"><img src="${src}" alt="${escapeHtml(name)}" style="max-width:100%;max-height:100%;object-fit:contain;border-radius:8px"></div>`;
@@ -379,12 +381,12 @@ function showStoredFile(id,name,type){
     <div class="gw-modal-head"><div><strong>${escapeHtml(name)}</strong><small>${escapeHtml(type||'Stored file')}</small></div><button class="gw-modal-close" onclick="showDataStorageModal()" aria-label="Back">×</button></div>
     <div class="gw-modal-body">
       <div class="data-file-preview">${previewContent}</div>
-      <div class="record-actions"><button type="button" class="gw-btn secondary" onclick="showDownloadConfirm(${Number(id)},${JSON.stringify(String(name))})"><span class="material-symbols-outlined">download</span>DOWNLOAD</button><button type="button" class="gw-btn btn-danger" onclick="deleteStoredFile(${Number(id)},${JSON.stringify(String(name))})"><span class="material-symbols-outlined">delete</span>DELETE</button></div>
+      <div class="record-actions"><button type="button" class="gw-btn secondary" onclick="showDownloadConfirm(${Number(id)},${escapeHtml(JSON.stringify(String(name)))})"><span class="material-symbols-outlined">download</span>DOWNLOAD</button><button type="button" class="gw-btn btn-danger" onclick="deleteStoredFile(${Number(id)},${escapeHtml(JSON.stringify(String(name)))})"><span class="material-symbols-outlined">delete</span>DELETE</button></div>
     </div>
   </div></div>`;
 }
 function deleteStoredFile(id,name){
-  const fd=new FormData(); fd.append('id',id);
+  const fd=new FormData(); fd.append('id',id); fd.append('csrf_token',String(window.CSRF_TOKEN||''));
   if(!confirm('Delete '+name+'? The file will be moved to Archive and can be recovered later.')) return;
   fetch(`${window.APP_BASE||''}/includes/data_storage.php?action=delete`,{method:'POST',body:fd,credentials:'same-origin'})
    .then(r=>r.json()).then(data=>{if(!data.ok)throw new Error(data.error||'Delete failed.');window.DATA_STORAGE_HAS_FILES=null;showDataStorageModal();})
@@ -393,9 +395,9 @@ function deleteStoredFile(id,name){
 function showDownloadConfirm(id,name){
   const root=document.getElementById('modalRoot'); if(!root)return;
   root.innerHTML=`<div class="gw-modal-backdrop"><div class="gw-modal confirmation-modal">
-    <div class="gw-modal-head"><div><strong>DOWNLOAD CONFIRMATION</strong></div><button class="gw-modal-close" onclick="showStoredFile(${Number(id)},${JSON.stringify(String(name))},'Stored file')">×</button></div>
+    <div class="gw-modal-head"><div><strong>DOWNLOAD CONFIRMATION</strong></div><button class="gw-modal-close" onclick="showStoredFile(${Number(id)},${escapeHtml(JSON.stringify(String(name)))},'Stored file')">×</button></div>
     <div class="gw-modal-body"><div class="confirmation-icon"><span class="material-symbols-outlined">download</span></div><p class="confirmation-text">ARE YOU SURE TO DOWNLOAD THE DATA/FILES</p>
-      <div class="record-actions"><button class="gw-btn secondary" type="button" onclick="showStoredFile(${Number(id)},${JSON.stringify(String(name))},'Stored file')">NO</button><button class="gw-btn primary" type="button" onclick="window.location.href='${window.APP_BASE||''}/includes/data_storage.php?action=download&id=${Number(id)}'">YES, DOWNLOAD</button></div>
+      <div class="record-actions"><button class="gw-btn secondary" type="button" onclick="showStoredFile(${Number(id)},${escapeHtml(JSON.stringify(String(name)))},'Stored file')">NO</button><button class="gw-btn primary" type="button" onclick="window.location.href='${window.APP_BASE||''}/includes/data_storage.php?action=download&id=${Number(id)}'">YES, DOWNLOAD</button></div>
     </div>
   </div></div>`;
 }
@@ -511,7 +513,7 @@ function showArchiveModal(){
       <span class="data-storage-file-main"><strong>${escapeHtml(x.item_name)}</strong><small>${escapeHtml(x.item_type)} · Deleted ${escapeHtml(x.deleted_at||'')}</small></span>
       <div style="display:flex;gap:6px;align-items:center">
         <button class="gw-btn primary" type="button" onclick="recoverArchive(${Number(x.id)})"><span class="material-symbols-outlined">restore</span>Recover</button>
-        <button class="gw-btn btn-danger" type="button" onclick="deleteArchiveItem(${Number(x.id)},${JSON.stringify(String(x.item_name))})"><span class="material-symbols-outlined">delete_forever</span>Delete</button>
+        <button class="gw-btn btn-danger" type="button" onclick="deleteArchiveItem(${Number(x.id)},${escapeHtml(JSON.stringify(String(x.item_name)))})"><span class="material-symbols-outlined">delete_forever</span>Delete</button>
       </div>
     </div>`).join('');
    }).catch(()=>{const box=document.getElementById('archiveList');if(box)box.innerHTML='<div class="notification-empty"><strong>Unable to load archive.</strong><p>Please try again.</p></div>';});
@@ -568,7 +570,7 @@ function showReleaseFileStoragePicker(){
    if(!data.ok || !Array.isArray(data.items) || !data.items.length){box.innerHTML='<div class="notification-empty"><span class="material-symbols-outlined">folder_off</span><strong>NO DATA/FILES STORED YET.</strong></div>';return;}
    box.innerHTML=data.items.map(f=>{
      const checked=selected.has(Number(f.id));
-     return `<button type="button" class="data-storage-item ${checked?'selected-storage-item':''}" onclick="toggleReleaseFileSelection(${Number(f.id)},${JSON.stringify(String(f.file_name))},${JSON.stringify(String(f.file_type||''))})"><span class="data-storage-file-icon material-symbols-outlined">${checked?'check_circle':'description'}</span><span class="data-storage-file-main"><strong>${escapeHtml(f.file_name)}</strong><small>${escapeHtml(f.source_branch||'Other Branch')} · ${escapeHtml(formatBytes(f.file_size))}</small></span><span class="material-symbols-outlined">${checked?'check':'add'}</span></button>`;
+     return `<button type="button" class="data-storage-item ${checked?'selected-storage-item':''}" onclick="toggleReleaseFileSelection(${Number(f.id)},${escapeHtml(JSON.stringify(String(f.file_name)))},${escapeHtml(JSON.stringify(String(f.file_type||'')))})"><span class="data-storage-file-icon material-symbols-outlined">${checked?'check_circle':'description'}</span><span class="data-storage-file-main"><strong>${escapeHtml(f.file_name)}</strong><small>${escapeHtml(f.source_branch||'Other Branch')} · ${escapeHtml(formatBytes(f.file_size))}</small></span><span class="material-symbols-outlined">${checked?'check':'add'}</span></button>`;
    }).join('');
  }).catch(()=>{const box=document.getElementById('releaseStoragePickerList');if(box)box.innerHTML='<div class="notification-empty"><span class="material-symbols-outlined">error</span><strong>UNABLE TO LOAD DATA/FILES.</strong><p>Please try again.</p></div>';});
 }
